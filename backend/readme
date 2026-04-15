@@ -1,0 +1,191 @@
+# 🚀 Edwiserr Backend (FastAPI)
+
+AI-powered personality assessment backend using OCEAN model + MBTI mapping.
+
+---
+
+## 📌 Features
+
+* Adaptive personality questionnaire
+* OCEAN trait scoring (Openness, Conscientiousness, Extraversion, Agreeableness, Neuroticism)
+* MBTI-style output
+* Confidence scoring system
+* REST API with FastAPI
+* CORS enabled for frontend integration
+
+---
+
+## 🛠 Tech Stack
+
+* FastAPI
+* Python 3.9+
+* Uvicorn
+* Pydantic
+
+---
+
+## 📂 Project Structure
+
+```
+backend/
+│
+├── main.py
+├── routers/
+│   ├── __init__.py
+│   └── personality.py
+│
+├── personality/
+│   ├── __init__.py
+│   ├── questions.py
+│   ├── scorer.py
+│   └── confidence.py
+```
+
+---
+
+## ⚙️ Setup Instructions
+
+### 1. Create virtual environment
+
+```bash
+python -m venv venv
+```
+
+Activate:
+
+```bash
+# Windows
+venv\Scripts\activate
+
+# Mac/Linux
+source venv/bin/activate
+```
+
+---
+
+### 2. Install dependencies
+
+```bash
+pip install fastapi uvicorn
+```
+
+---
+
+### 3. Run the server
+
+```bash
+uvicorn main:app --reload
+```
+
+---
+
+## 🌐 API Endpoints
+
+### 🔹 Get Questions
+
+```
+POST /api/personality/questions
+```
+
+**Request Body:**
+
+```json
+{
+  "user_type": "undergraduate",
+  "inst_id": "inst_001"
+}
+```
+
+---
+
+### 🔹 Submit Answers
+
+```
+POST /api/personality/submit
+```
+
+**Request Body:**
+
+```json
+{
+  "user_type": "undergraduate",
+  "inst_id": "inst_001",
+  "answers": {
+    "O1": 4,
+    "C2": 5
+  }
+}
+```
+
+---
+
+## 📊 Response Example
+
+```json
+{
+  "ocean_scores": {
+    "O": 78.5,
+    "C": 65.2,
+    "E": 52.1,
+    "A": 70.3,
+    "N": 40.6
+  },
+  "mbti_display": "ENFP",
+  "confidence": {
+    "overall": 0.82
+  }
+}
+```
+
+---
+
+## 📄 API Docs
+
+After running server:
+
+👉 http://127.0.0.1:8000/docs
+
+---
+
+## 🔥 Notes
+
+* Questions are adaptively selected based on user type
+* Reverse scoring is handled automatically
+* Confidence is calculated using response variance
+
+---
+
+## 🧠 Future Improvements
+
+* Database integration
+* User authentication
+* Career recommendation engine
+* Analytics dashboard
+
+---
+
+## 👨‍💻 Run Status Check
+
+```bash
+GET /
+```
+
+Response:
+
+```json
+{
+  "status": "Edwiserr API is running"
+}
+```
+
+---
+
+## 📎 Reference
+
+Based on your implementation setup: 
+
+---
+
+## 💡 Author
+
+Built for scalable AI-driven career guidance 🚀
