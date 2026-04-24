@@ -1,112 +1,284 @@
-# Edwiserr — Backend
+# Backend README
 
-FastAPI backend. Handles personality scoring, confidence calculation, and question selection.
+# Edwiserr Backend
+
+Backend service for **Edwiserr**, an AI-powered personality assessment and career guidance platform.
+
+Built using **FastAPI + Python** to provide scalable APIs, psychometric scoring logic, confidence analytics, career recommendation logic, and frontend integration.
 
 ---
 
-## Setup
+## 🚀 Features
+
+* FastAPI REST APIs
+* Adaptive personality question engine
+* OCEAN personality scoring
+* MBTI-style display label generation
+* Confidence score system
+* Response behavior analytics
+* Clarification question flow
+* Career recommendation engine
+* Career profile matching
+* Swagger API documentation
+* Frontend integration ready
+
+---
+
+## 🛠 Tech Stack
+
+* Python
+* FastAPI
+* Uvicorn
+* Pydantic
+* Pandas
+* NumPy
+
+---
+
+## 📂 Folder Structure
+
+```text
+backend/
+│── main.py
+│── README.md
+│── venv/
+│
+├── routers/
+│   ├── __init__.py
+│   ├── personality.py
+│   └── careers.py
+│
+├── personality/
+│   ├── confidence.py
+│   ├── questions.py
+│   ├── scorer.py
+│   └── selector.py
+│
+└── careers/
+    ├── __init__.py
+    ├── profiles.py
+    └── recommender.py
+```
+
+---
+
+## ⚙️ Installation
+
+Clone repository and move to backend folder:
 
 ```bash
+git clone <your-repo-link>
 cd backend
+```
+
+Create virtual environment:
+
+```bash
 python -m venv venv
+```
+
+Activate environment:
+
+### Windows
+
+```bash
 venv\Scripts\activate
-pip install fastapi uvicorn pandas numpy openpyxl
+```
+
+### Mac / Linux
+
+```bash
+source venv/bin/activate
+```
+
+Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+## ▶️ Run Server
+
+```bash
 uvicorn main:app --reload
 ```
 
-Swagger docs at `http://127.0.0.1:8000/docs`
-
 ---
 
-## Structure
+## 🌐 Local Development
 
-```
-backend/
-├── main.py                  Entry point, CORS config
-├── routers/
-│   └── personality.py       API endpoints
-└── personality/
-    ├── questions.py         375 questions + sub-dimension registry
-    ├── scorer.py            OCEAN scoring + confidence engine
-    ├── selector.py          Adaptive question selection
-    └── confidence.py        (legacy — superseded by scorer.py)
+Backend runs on:
+
+```text
+http://127.0.0.1:8000
 ```
 
----
+Swagger Docs:
 
-## API Endpoints
-
-### `POST /api/personality/questions`
-Returns adaptive question set. Weights are never exposed to frontend.
-
-```json
-{ "user_type": "undergraduate", "inst_id": "inst_001", "mode": "fast" }
+```text
+http://127.0.0.1:8000/docs
 ```
 
-Modes: `fast` (25Q) · `standard` (75Q) · `full` (375Q)
+ReDoc:
 
----
-
-### `POST /api/personality/submit`
-Accepts answers + response times. Returns full OCEAN profile.
-
-```json
-{
-  "user_type": "undergraduate",
-  "inst_id": "inst_001",
-  "answers": { "O1": "C", "ST1": "A" },
-  "response_times_ms": { "O1": 4200, "ST1": 8100 }
-}
+```text
+http://127.0.0.1:8000/redoc
 ```
 
 ---
 
-### `POST /api/personality/clarify`
-Returns 2 targeted questions for traits with lowest confidence.
+## 🔌 API Endpoints
 
----
+### Root Health Check
 
-## Scoring Logic
-
-**OCEAN Scores (0–100)**
-Each question has pre-assigned option weights (0.1–0.9). Score = average weight × 100. Neuroticism is inverted so 100 = emotionally stable across all traits.
-
-**Confidence Engine — 3 Pillars**
-
-| Pillar | Weight | Method |
-|---|---|---|
-| P1 Internal Consistency | 40% | Cronbach's alpha per trait |
-| P2 Behavioral Quality | 35% | RT flags + straight-lining + IRV |
-| P3 Statistical Stability | 25% | Stubbed — needs calibration data |
-
-```
-Confidence(trait)   = 0.40×C1 + 0.35×C2 + 0.25×C3
-Confidence(overall) = mean across all 5 traits
-Threshold           = 0.75 → below triggers clarification questions
+```http
+GET /
 ```
 
-**P2 Behavioral flags**
-- RT < 1.5s → rushing (full penalty)
-- RT 1.5–3s → fast (small penalty)
-- RT > 90s → distracted (moderate penalty)
-- ≥4 same consecutive options → straight-lining suspect
-- ≥7 same consecutive options → strong IER signal
+### Personality Questions
+
+```http
+POST /api/personality/questions
+```
+
+### Submit Personality Answers
+
+```http
+POST /api/personality/submit
+```
+
+### Clarification Questions
+
+```http
+POST /api/personality/clarify
+```
+
+### Career Recommendations
+
+```http
+POST /api/careers/recommend
+```
+
+### Career Profiles
+
+```http
+GET /api/careers/profiles
+```
 
 ---
 
-## Dataset
+## 🧠 Core Modules
 
-`personality/questions.py` — generated from `Personality_fixed.xlsx`
+## personality/
 
-- 375 questions · 5 traits · 5 sub-dimensions each · 15 questions per sub-dimension
-- Neuroticism weights are inverted (A=0.9 high distress → D=0.1 low distress)
+### questions.py
+
+Stores psychometric dataset, scenarios, options, weights, and trait mappings.
+
+### selector.py
+
+Adaptive question selection based on user type and mode.
+
+### scorer.py
+
+Calculates:
+
+* OCEAN scores
+* Trait averages
+* MBTI-style label
+* Personality profile
+
+### confidence.py
+
+Measures:
+
+* Internal consistency
+* Response timing behavior
+* Straight-line detection
+* Confidence scoring
 
 ---
 
-## Institution Config
+## careers/
 
-`inst_001` — General (all user types)
-`inst_002` — Engineering college
-`inst_003` — Arts & Commerce college
+### profiles.py
 
-Add new institutions in `selector.py` → `USER_TYPE_SUBDIM_BOOST`.
+Stores career benchmark profiles and domain mappings.
+
+### recommender.py
+
+Matches user personality profile with careers using scoring logic.
+
+### routers/careers.py
+
+Career recommendation API routes.
+
+---
+
+## 📊 Personality Model
+
+Uses **OCEAN Five Factor Model**:
+
+* Openness
+* Conscientiousness
+* Extraversion
+* Agreeableness
+* Neuroticism
+
+---
+
+## 🎯 Career Engine
+
+Generates recommendations such as:
+
+* Software Engineer
+* Data Scientist
+* Product Manager
+* Designer
+* Entrepreneur
+* Analyst
+* Healthcare Roles
+* Creative Careers
+
+Based on user personality fit.
+
+---
+
+## 📌 Commands
+
+Run server:
+
+```bash
+uvicorn main:app --reload
+```
+
+Install packages:
+
+```bash
+pip install -r requirements.txt
+```
+
+Freeze dependencies:
+
+```bash
+pip freeze > requirements.txt
+```
+
+---
+
+## 🔒 Future Enhancements
+
+* JWT Authentication
+* Database integration
+* User assessment history
+* PDF report export
+* AI chatbot guidance
+* Admin analytics dashboard
+* Real-world O*NET integration
+
+---
+
+
+AI-powered Career Guidance System using Psychometric Intelligence.
