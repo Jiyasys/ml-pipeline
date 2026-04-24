@@ -7,6 +7,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from routers import personality
+from routers import careers
+
 
 app = FastAPI(
     title="Edwiserr API",
@@ -25,6 +27,7 @@ app.add_middleware(
 
 # Routers
 app.include_router(personality.router, prefix="/api/personality", tags=["Personality"])
+app.include_router(careers.router, prefix="/api/careers", tags=["Careers"])
 
 @app.get("/")
 def root():
