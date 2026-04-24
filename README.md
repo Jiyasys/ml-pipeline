@@ -1,61 +1,220 @@
-# Edwiserr — AI-Powered Career Navigation
+# Edwiserr README
 
-Personality-driven career counselling system. Users complete a scenario-based assessment, receive an OCEAN personality profile, and get matched to careers, universities, and courses.
+# Edwiserr – AI Career Guidance Platform
+
+**Edwiserr** is an AI-powered psychometric assessment and career recommendation platform designed for students and professionals.
+
+The system evaluates personality traits using the **OCEAN Five Factor Model**, calculates confidence scores, and recommends careers aligned with the user's behavioral profile.
+
+Built with **React + FastAPI** for modern scalable full-stack deployment.
 
 ---
 
-## Repo Structure
+## 🚀 Key Features
 
-```
+* Personality Assessment Engine
+* OCEAN Trait Scoring
+* MBTI-style Display Label
+* Confidence Score Analytics
+* Adaptive Question Flow
+* Career Recommendation Engine
+* Modern Interactive Dashboard
+* FastAPI REST APIs
+* React Frontend UI
+* Scalable Architecture
+
+---
+
+## 🛠 Tech Stack
+
+### Frontend
+
+* React.js
+* Vite
+* Axios
+* Recharts
+* CSS
+
+### Backend
+
+* Python
+* FastAPI
+* Uvicorn
+* Pandas
+* NumPy
+* Pydantic
+
+---
+
+## 📂 Project Structure
+
+```text id="b0dx43"
 edwiserr/
-├── backend/        FastAPI + ML (Python)
-├── frontend/       React + Vite (JavaScript)
-└── README.md
+│── README.md
+│
+├── frontend/
+│   ├── src/
+│   ├── public/
+│   ├── package.json
+│   └── README.md
+│
+└── backend/
+    ├── main.py
+    ├── routers/
+    ├── personality/
+    ├── careers/
+    ├── venv/
+    └── README.md
 ```
 
 ---
 
-## Quick Start
+## ⚙️ Installation
 
-**1. Backend**
-```bash
-cd backend
-python -m venv venv
-venv\Scripts\activate        # Windows
-pip install fastapi uvicorn pandas numpy openpyxl
-uvicorn main:app --reload
-# → http://127.0.0.1:8000/docs
+Clone the repository:
+
+```bash id="s2q6c5"
+git clone <your-repo-link>
+cd edwiserr
 ```
 
-**2. Frontend**
-```bash
+---
+
+## ▶️ Run Backend
+
+```bash id="0rx8e6"
+cd backend
+pip install -r requirements.txt
+uvicorn main:app --reload
+```
+
+Backend URL:
+
+```text id="7cv7xk"
+http://127.0.0.1:8000
+```
+
+API Docs:
+
+```text id="q8ccu4"
+http://127.0.0.1:8000/docs
+```
+
+---
+
+## ▶️ Run Frontend
+
+```bash id="w9gll3"
 cd frontend
 npm install
 npm run dev
-# → http://localhost:5173
 ```
 
-Both must run simultaneously. Backend on `8000`, frontend on `5173`.
+Frontend URL:
+
+```text id="pj5s8p"
+http://localhost:5173
+```
 
 ---
 
-## Current Scope
+## 🧠 How It Works
 
-| Module | Status |
-|---|---|
-| Personality Engine (OCEAN scoring) | ✅ Done |
-| Confidence Engine (Pillar 1 + 2) | ✅ Done |
-| Career Recommendation Engine | 🔜 Phase 2 |
-| University Ranking | 🔜 Phase 3 |
-| AI Counselling Layer | 🔜 Phase 4 |
-| Statistical Stability (Pillar 3) | 🔜 Needs calibration data |
+### Step 1 – User Selection
+
+Choose user type:
+
+* Class 10
+* Class 12
+* Undergraduate
+* Professional
+
+### Step 2 – Assessment
+
+Users answer scenario-based personality questions.
+
+### Step 3 – Analysis
+
+Backend computes:
+
+* OCEAN Scores
+* MBTI-style Label
+* Confidence Score
+
+### Step 4 – Recommendation
+
+System suggests careers best aligned with the user profile.
 
 ---
 
-## Team Split
+## 📊 Personality Traits Used
 
-| Role | Scope |
-|---|---|
-| ML Engineer | `backend/personality/` — scoring, confidence, selector |
-| Backend | `backend/routers/`, `main.py`, deployment |
-| Frontend | `frontend/src/` |
+* **O** – Openness
+* **C** – Conscientiousness
+* **E** – Extraversion
+* **A** – Agreeableness
+* **N** – Neuroticism
+
+---
+
+## 🎯 Sample Career Outputs
+
+* Software Engineer
+* Data Scientist
+* Product Manager
+* UX Designer
+* Entrepreneur
+* Analyst
+* Healthcare Professional
+* Creative Strategist
+
+---
+
+## 🔌 Main APIs
+
+### Personality
+
+```http id="i5l5gh"
+POST /api/personality/questions
+POST /api/personality/submit
+POST /api/personality/clarify
+```
+
+### Careers
+
+```http id="7w1mbr"
+POST /api/careers/recommend
+GET /api/careers/profiles
+```
+
+---
+
+## 📌 Development Commands
+
+### Frontend
+
+```bash id="hmzz81"
+npm run dev
+npm run build
+```
+
+### Backend
+
+```bash id="9nobor"
+uvicorn main:app --reload
+```
+
+---
+
+## 🔒 Future Scope
+
+* Login / Authentication
+* User History Dashboard
+* Resume-based Career Matching
+* AI Chat Guidance
+* PDF Reports
+* Admin Analytics Panel
+* O*NET Live Career Integration
+
+
+**Edwiserr – AI-powered Career Guidance using Psychometric Intelligence**
