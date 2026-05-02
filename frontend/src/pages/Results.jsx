@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import axios from "axios";
+import PersonalityCard from "./PersonalityCard";
 
 const API = "http://127.0.0.1:8000/api";
 
@@ -10,8 +11,7 @@ const TRAIT_META = {
   Agreeableness:     { color: "#4cc97a", emoji: "🤝", low: "Analytical, direct, logic over harmony",      high: "Cooperative, empathetic, values relationships" },
   Neuroticism:       { color: "#9a4cc9", emoji: "🌊", low: "Emotionally stable, calm under pressure",     high: "Emotionally sensitive, deeply reactive" },
 };
-const TRAIT_ORDER = ["Openness","Conscientiousness","Extraversion","Agreeableness","Neuroticism"];
-
+const TRAIT_ORDER   = ["Openness","Conscientiousness","Extraversion","Agreeableness","Neuroticism"];
 const SOURCE_LABELS = { onet: "Global", indian: "India", hybrid: "Hybrid" };
 const SOURCE_COLORS = { onet: "#4c9ac9", indian: "#c9a84c", hybrid: "#4cc97a" };
 
@@ -35,8 +35,8 @@ function card(extra = {}) {
 }
 
 export default function Results({ profile, onViewCareers, onRetake }) {
-  const [topCareers,  setTopCareers]  = useState([]);
-  const [careerLoad,  setCareerLoad]  = useState(true);
+  const [topCareers, setTopCareers] = useState([]);
+  const [careerLoad, setCareerLoad] = useState(true);
 
   useEffect(() => {
     if (!profile?.ocean_scores) return;
@@ -53,10 +53,10 @@ export default function Results({ profile, onViewCareers, onRetake }) {
   if (!profile) return null;
 
   const { ocean_scores, mbti_display, confidence, questions_answered } = profile;
-  const overall  = confidence?.overall ?? 0;
-  const p1       = confidence?.pillar_1 ?? {};
-  const p2       = confidence?.pillar_2 ?? {};
-  const p3       = confidence?.pillar_3 ?? {};
+  const overall = confidence?.overall ?? 0;
+  const p1      = confidence?.pillar_1 ?? {};
+  const p2      = confidence?.pillar_2 ?? {};
+  const p3      = confidence?.pillar_3 ?? {};
 
   return (
     <div className="results">
@@ -116,10 +116,10 @@ export default function Results({ profile, onViewCareers, onRetake }) {
         </div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           {[
-            { l: mbti_display[0], m: mbti_display[0] === "E" ? "Extraverted"  : "Introverted" },
-            { l: mbti_display[1], m: mbti_display[1] === "N" ? "Intuitive"    : "Sensing"     },
-            { l: mbti_display[2], m: mbti_display[2] === "F" ? "Feeling"      : "Thinking"    },
-            { l: mbti_display[3], m: mbti_display[3] === "J" ? "Judging"      : "Perceiving"  },
+            { l: mbti_display[0], m: mbti_display[0] === "E" ? "Extraverted" : "Introverted" },
+            { l: mbti_display[1], m: mbti_display[1] === "N" ? "Intuitive"   : "Sensing"     },
+            { l: mbti_display[2], m: mbti_display[2] === "F" ? "Feeling"     : "Thinking"    },
+            { l: mbti_display[3], m: mbti_display[3] === "J" ? "Judging"     : "Perceiving"  },
           ].map(({ l, m }) => (
             <div key={l} style={{
               display: "flex", alignItems: "center", gap: 8,
@@ -136,6 +136,9 @@ export default function Results({ profile, onViewCareers, onRetake }) {
           Derived from OCEAN scores for display only.
         </p>
       </div>
+
+      {/* ── Personality Summary Card ────────────────────────── */}
+      <PersonalityCard mbtiType={mbti_display} />
 
       {/* ── Confidence Breakdown ───────────────────────────── */}
       <div style={card()}>
@@ -169,9 +172,9 @@ export default function Results({ profile, onViewCareers, onRetake }) {
             P2 — {p2.label ?? "Behavioral Quality"}
           </div>
           {[
-            { label: "Response time", score: p2.rt_score ?? 0.5,  detail: `${p2.rt_flags ?? 0} flagged` },
-            { label: "Straight-lining", score: p2.str_score ?? 0.5, detail: `max run: ${p2.max_run ?? 0}` },
-            { label: "Variability",    score: p2.irv_score ?? 0.5, detail: `IRV: ${(p2.irv ?? 0).toFixed(2)}` },
+            { label: "Response time",   score: p2.rt_score  ?? 0.5, detail: `${p2.rt_flags ?? 0} flagged`         },
+            { label: "Straight-lining", score: p2.str_score ?? 0.5, detail: `max run: ${p2.max_run ?? 0}`         },
+            { label: "Variability",     score: p2.irv_score ?? 0.5, detail: `IRV: ${(p2.irv ?? 0).toFixed(2)}`   },
           ].map(({ label, score, detail }) => (
             <div key={label} style={{ marginBottom: 10 }}>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 5 }}>
@@ -255,8 +258,10 @@ export default function Results({ profile, onViewCareers, onRetake }) {
         <button className="btn-ghost" onClick={onViewCareers}>All Careers →</button>
         <button className="btn-primary" onClick={() => {
           const blob = new Blob([JSON.stringify(profile, null, 2)], { type: "application/json" });
-          const a = document.createElement("a");
-          a.href = URL.createObjectURL(blob); a.download = `edwiserr_${mbti_display}.json`; a.click();
+          const a    = document.createElement("a");
+          a.href     = URL.createObjectURL(blob);
+          a.download = `edwiserr_${mbti_display}.json`;
+          a.click();
         }}>
           Download
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
@@ -264,6 +269,7 @@ export default function Results({ profile, onViewCareers, onRetake }) {
           </svg>
         </button>
       </div>
+
     </div>
   );
 }
@@ -315,4 +321,3 @@ function CareerTeaser({ career, rank }) {
     </div>
   );
 }
-
