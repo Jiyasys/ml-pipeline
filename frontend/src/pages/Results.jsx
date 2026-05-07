@@ -35,8 +35,9 @@ function card(extra = {}) {
 }
 
 export default function Results({ profile, onViewCareers, onRetake }) {
-  const [topCareers, setTopCareers] = useState([]);
-  const [careerLoad, setCareerLoad] = useState(true);
+  const [topCareers,  setTopCareers]  = useState([]);
+  const [careerLoad,  setCareerLoad]  = useState(true);
+  const [showDetails, setShowDetails] = useState(false);  // toggle for OCEAN + confidence
 
   useEffect(() => {
     if (!profile?.ocean_scores) return;
@@ -67,139 +68,12 @@ export default function Results({ profile, onViewCareers, onRetake }) {
         <div className="mbti-badge">{mbti_display}</div>
         <h2 className="results-title">Assessment Complete</h2>
         <p className="results-sub">{questions_answered} questions · 5 personality dimensions</p>
-
-        <div className="confidence-bar-wrap" style={{ marginTop: 24 }}>
-          <div className="confidence-label">
-            <span>Profile confidence</span>
-            <span style={{ color: overall >= 0.75 ? "var(--gold)" : "var(--danger)" }}>
-              {Math.round(overall * 100)}%{overall < 0.75 ? " ⚠" : ""}
-            </span>
-          </div>
-          <div className="confidence-bar">
-            <div className="confidence-fill" style={{ width: `${overall * 100}%` }} />
-          </div>
-          {profile.needs_clarification && (
-            <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 6, fontStyle: "italic", textAlign: "center" }}>
-              Consider a follow-up assessment for higher accuracy
-            </p>
-          )}
-        </div>
       </div>
 
-      {/* ── OCEAN Cards ────────────────────────────────────── */}
-      <div className="ocean-grid">
-        {TRAIT_ORDER.map((trait, i) => {
-          const score = ocean_scores[trait] ?? 50;
-          const meta  = TRAIT_META[trait];
-          const conf  = confidence?.per_trait?.[trait];
-          return (
-            <div key={trait} className="ocean-card" style={{ animationDelay: `${i * 0.1}s` }}>
-              <div style={{ fontSize: 22, marginBottom: 8 }}>{meta.emoji}</div>
-              <div className="ocean-trait">{trait}</div>
-              <div className="ocean-score" style={{ color: meta.color }}>{score}</div>
-              <Bar pct={score} color={meta.color} />
-              <div className="ocean-subdim">{score >= 50 ? meta.high : meta.low}</div>
-              {conf !== undefined && (
-                <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>
-                  confidence {Math.round(conf * 100)}%
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      {/* ── MBTI Label ─────────────────────────────────────── */}
-      <div style={card()}>
-        <div style={{ fontSize: 11, letterSpacing: "0.15em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 16 }}>
-          MBTI-Style Profile
-        </div>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          {[
-            { l: mbti_display[0], m: mbti_display[0] === "E" ? "Extraverted" : "Introverted" },
-            { l: mbti_display[1], m: mbti_display[1] === "N" ? "Intuitive"   : "Sensing"     },
-            { l: mbti_display[2], m: mbti_display[2] === "F" ? "Feeling"     : "Thinking"    },
-            { l: mbti_display[3], m: mbti_display[3] === "J" ? "Judging"     : "Perceiving"  },
-          ].map(({ l, m }) => (
-            <div key={l} style={{
-              display: "flex", alignItems: "center", gap: 8,
-              background: "rgba(201,168,76,0.06)",
-              border: "1px solid rgba(201,168,76,0.15)",
-              borderRadius: 8, padding: "8px 16px",
-            }}>
-              <span style={{ fontFamily: "'DM Serif Display',serif", fontSize: 22, color: "var(--gold)" }}>{l}</span>
-              <span style={{ fontSize: 13, color: "var(--muted)" }}>{m}</span>
-            </div>
-          ))}
-        </div>
-        <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 12, fontStyle: "italic" }}>
-          Derived from OCEAN scores for display only.
-        </p>
-      </div>
-
-      {/* ── Personality Summary Card ────────────────────────── */}
+      {/* ── Personality Summary (always visible) ───────────── */}
       <PersonalityCard mbtiType={mbti_display} />
 
-      {/* ── Confidence Breakdown ───────────────────────────── */}
-      <div style={card()}>
-        <div style={{ fontSize: 11, letterSpacing: "0.15em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 20 }}>
-          Confidence Breakdown
-        </div>
-
-        {/* P1 */}
-        <div style={{ marginBottom: 18 }}>
-          <div style={{ fontSize: 13, color: "var(--gold)", marginBottom: 12, fontWeight: 500 }}>
-            P1 — {p1.label ?? "Internal Consistency"}
-          </div>
-          {TRAIT_ORDER.map(trait => (
-            <div key={trait} style={{ marginBottom: 10 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 5 }}>
-                <span style={{ color: "var(--cream2)" }}>{trait}</span>
-                <span style={{ color: "var(--gold)" }}>
-                  α={p1.alphas?.[trait] ?? "—"}  {Math.round((p1.scores?.[trait] ?? 0) * 100)}%
-                </span>
-              </div>
-              <Bar pct={(p1.scores?.[trait] ?? 0) * 100} />
-            </div>
-          ))}
-        </div>
-
-        <div style={{ height: 1, background: "rgba(201,168,76,0.08)", margin: "16px 0" }} />
-
-        {/* P2 */}
-        <div style={{ marginBottom: 18 }}>
-          <div style={{ fontSize: 13, color: "var(--gold)", marginBottom: 12, fontWeight: 500 }}>
-            P2 — {p2.label ?? "Behavioral Quality"}
-          </div>
-          {[
-            { label: "Response time",   score: p2.rt_score  ?? 0.5, detail: `${p2.rt_flags ?? 0} flagged`         },
-            { label: "Straight-lining", score: p2.str_score ?? 0.5, detail: `max run: ${p2.max_run ?? 0}`         },
-            { label: "Variability",     score: p2.irv_score ?? 0.5, detail: `IRV: ${(p2.irv ?? 0).toFixed(2)}`   },
-          ].map(({ label, score, detail }) => (
-            <div key={label} style={{ marginBottom: 10 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 5 }}>
-                <span style={{ color: "var(--cream2)" }}>{label}</span>
-                <span style={{ color: "var(--gold)" }}>{detail}  {Math.round(score * 100)}%</span>
-              </div>
-              <Bar pct={score * 100} />
-            </div>
-          ))}
-        </div>
-
-        <div style={{ height: 1, background: "rgba(201,168,76,0.08)", margin: "16px 0" }} />
-
-        {/* P3 */}
-        <div>
-          <div style={{ fontSize: 13, color: "var(--muted)", fontWeight: 500, marginBottom: 8 }}>
-            P3 — Statistical Stability
-          </div>
-          <p style={{ fontSize: 12, color: "var(--muted)", fontStyle: "italic" }}>
-            {p3.note ?? "Pending calibration data"}
-          </p>
-        </div>
-      </div>
-
-      {/* ── Top 3 Career Teasers ────────────────────────────── */}
+      {/* ── Top 3 Career Teasers (always visible) ──────────── */}
       <div style={card()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
           <div>
@@ -238,22 +112,8 @@ export default function Results({ profile, onViewCareers, onRetake }) {
         )}
       </div>
 
-      {/* ── Raw JSON ───────────────────────────────────────── */}
-      <details style={{ marginBottom: 24 }}>
-        <summary style={{ cursor: "pointer", fontSize: 13, color: "var(--muted)", padding: "12px 0", listStyle: "none" }}>
-          View raw profile JSON ↓
-        </summary>
-        <pre style={{
-          marginTop: 12, background: "var(--navy2)",
-          border: "1px solid rgba(201,168,76,0.1)", borderRadius: "var(--radius)",
-          padding: 20, fontSize: 11, color: "var(--cream2)", overflow: "auto", lineHeight: 1.7,
-        }}>
-          {JSON.stringify(profile, null, 2)}
-        </pre>
-      </details>
-
       {/* ── Actions ────────────────────────────────────────── */}
-      <div className="results-actions">
+      <div className="results-actions" style={{ marginBottom: 32 }}>
         <button className="btn-ghost" onClick={onRetake}>← Retake</button>
         <button className="btn-ghost" onClick={onViewCareers}>All Careers →</button>
         <button className="btn-primary" onClick={() => {
@@ -269,6 +129,137 @@ export default function Results({ profile, onViewCareers, onRetake }) {
           </svg>
         </button>
       </div>
+
+      {/* ── Developer / Admin Toggle ────────────────────────── */}
+      <div style={{ borderTop: "1px solid rgba(201,168,76,0.08)", paddingTop: 20, marginBottom: showDetails ? 0 : 40 }}>
+        <button
+          onClick={() => setShowDetails(v => !v)}
+          style={{
+            background: "transparent",
+            border: "1px solid rgba(201,168,76,0.15)",
+            borderRadius: 8,
+            padding: "8px 18px",
+            cursor: "pointer",
+            fontSize: 12,
+            color: "var(--muted)",
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            transition: "all 0.2s",
+          }}
+        >
+          <span style={{ fontSize: 14 }}>{showDetails ? "🔒" : "🔓"}</span>
+          {showDetails ? "Hide detailed scores" : "Show detailed scores (admin)"}
+        </button>
+      </div>
+
+      {/* ── Hidden: OCEAN + Confidence (admin only) ─────────── */}
+      {showDetails && (
+        <div style={{ marginTop: 20, paddingBottom: 40 }}>
+
+          {/* OCEAN Cards */}
+          <div style={{ fontSize: 11, letterSpacing: "0.15em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 14 }}>
+            OCEAN Scores
+          </div>
+          <div className="ocean-grid" style={{ marginBottom: 16 }}>
+            {TRAIT_ORDER.map((trait, i) => {
+              const score = ocean_scores[trait] ?? 50;
+              const meta  = TRAIT_META[trait];
+              const conf  = confidence?.per_trait?.[trait];
+              return (
+                <div key={trait} className="ocean-card" style={{ animationDelay: `${i * 0.1}s` }}>
+                  <div style={{ fontSize: 22, marginBottom: 8 }}>{meta.emoji}</div>
+                  <div className="ocean-trait">{trait}</div>
+                  <div className="ocean-score" style={{ color: meta.color }}>{score}</div>
+                  <Bar pct={score} color={meta.color} />
+                  <div className="ocean-subdim">{score >= 50 ? meta.high : meta.low}</div>
+                  {conf !== undefined && (
+                    <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>
+                      conf {Math.round(conf * 100)}%
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Confidence */}
+          <div style={card()}>
+            <div style={{ fontSize: 11, letterSpacing: "0.15em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 16 }}>
+              Overall Confidence — {Math.round(overall * 100)}%
+            </div>
+            <Bar pct={overall * 100} height={4} />
+
+            <div style={{ height: 1, background: "rgba(201,168,76,0.08)", margin: "20px 0" }} />
+
+            {/* P1 */}
+            <div style={{ marginBottom: 18 }}>
+              <div style={{ fontSize: 13, color: "var(--gold)", marginBottom: 12, fontWeight: 500 }}>
+                P1 — {p1.label ?? "Internal Consistency"}
+              </div>
+              {TRAIT_ORDER.map(trait => (
+                <div key={trait} style={{ marginBottom: 10 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 5 }}>
+                    <span style={{ color: "var(--cream2)" }}>{trait}</span>
+                    <span style={{ color: "var(--gold)" }}>
+                      α={p1.alphas?.[trait] ?? "—"}  {Math.round((p1.scores?.[trait] ?? 0) * 100)}%
+                    </span>
+                  </div>
+                  <Bar pct={(p1.scores?.[trait] ?? 0) * 100} />
+                </div>
+              ))}
+            </div>
+
+            <div style={{ height: 1, background: "rgba(201,168,76,0.08)", margin: "16px 0" }} />
+
+            {/* P2 */}
+            <div style={{ marginBottom: 18 }}>
+              <div style={{ fontSize: 13, color: "var(--gold)", marginBottom: 12, fontWeight: 500 }}>
+                P2 — {p2.label ?? "Behavioral Quality"}
+              </div>
+              {[
+                { label: "Response time",   score: p2.rt_score  ?? 0.5, detail: `${p2.rt_flags ?? 0} flagged`        },
+                { label: "Straight-lining", score: p2.str_score ?? 0.5, detail: `max run: ${p2.max_run ?? 0}`        },
+                { label: "Variability",     score: p2.irv_score ?? 0.5, detail: `IRV: ${(p2.irv ?? 0).toFixed(2)}`  },
+              ].map(({ label, score, detail }) => (
+                <div key={label} style={{ marginBottom: 10 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 5 }}>
+                    <span style={{ color: "var(--cream2)" }}>{label}</span>
+                    <span style={{ color: "var(--gold)" }}>{detail}  {Math.round(score * 100)}%</span>
+                  </div>
+                  <Bar pct={score * 100} />
+                </div>
+              ))}
+            </div>
+
+            <div style={{ height: 1, background: "rgba(201,168,76,0.08)", margin: "16px 0" }} />
+
+            {/* P3 */}
+            <div>
+              <div style={{ fontSize: 13, color: "var(--muted)", fontWeight: 500, marginBottom: 8 }}>
+                P3 — Statistical Stability
+              </div>
+              <p style={{ fontSize: 12, color: "var(--muted)", fontStyle: "italic" }}>
+                {p3.note ?? "Pending calibration data"}
+              </p>
+            </div>
+          </div>
+
+          {/* Raw JSON */}
+          <details style={{ marginBottom: 24 }}>
+            <summary style={{ cursor: "pointer", fontSize: 13, color: "var(--muted)", padding: "12px 0", listStyle: "none" }}>
+              View raw profile JSON ↓
+            </summary>
+            <pre style={{
+              marginTop: 12, background: "var(--navy2)",
+              border: "1px solid rgba(201,168,76,0.1)", borderRadius: "var(--radius)",
+              padding: 20, fontSize: 11, color: "var(--cream2)", overflow: "auto", lineHeight: 1.7,
+            }}>
+              {JSON.stringify(profile, null, 2)}
+            </pre>
+          </details>
+        </div>
+      )}
 
     </div>
   );

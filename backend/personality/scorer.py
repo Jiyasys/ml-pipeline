@@ -1,298 +1,249 @@
-# ============================================================
-# EDWISERR — OCEAN Scorer + Confidence Engine
-# Pillar 1 : Internal Consistency  (Cronbach's Alpha)
-# Pillar 2 : Behavioral Quality    (RT + Straight-lining + IRV)
-# Pillar 3 : Statistical Stability (stubbed at 0.75 — needs calibration)
-#
-# Master formula:
-#   Confidence(trait) = 0.40×C1 + 0.35×C2 + 0.25×C3
-#   Confidence(overall) = mean across all 5 traits
-# ============================================================
+"""
+scorer.py — OCEAN Score Computation for Big Five Psychometric Assessment
 
-import math
-from statistics import mean, stdev
-from personality.questions import QUESTIONS, INVERTED_TRAITS
+Responsibility: answers → OCEAN scores (0–100) + confidence
+Nothing else.  No interpretation, no classification.
 
-Q_LOOKUP    = {q['id']: q for q in QUESTIONS}
-OPTION_KEYS = ['A', 'B', 'C', 'D']
-TRAITS      = ['Openness', 'Conscientiousness', 'Extraversion', 'Agreeableness', 'Neuroticism']
+Pipeline:
+  raw answers (A/B/C/D)
+    → encode_answers()       : map each answer to its question weight [0–1]
+    → group_by_trait()       : bucket encoded values by OCEAN trait
+    → compute_trait_scores() : mean per trait → scale to [0–100]
+    → compute_confidence()   : imported from personality.confidence
+    → build_profile()        : assemble final output dict
+"""
 
-W1, W2, W3 = 0.40, 0.35, 0.25
+from personality.questions import QUESTIONS
+from personality.confidence import compute_confidence
 
-# ── Helpers ──────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 
-def _clamp(val, lo=0.0, hi=1.0):
-    return max(lo, min(hi, val))
+SHORT_TO_FULL: dict[str, str] = {
+    "O": "Openness",
+    "C": "Conscientiousness",
+    "E": "Extraversion",
+    "A": "Agreeableness",
+    "N": "Neuroticism",
+}
 
-def _get_weight(qid: str, option: str) -> float:
-    return float(Q_LOOKUP[qid][f'weight_{option}'])
+TRAITS: list[str] = list(SHORT_TO_FULL.values())
 
-def _longest_run(seq) -> int:
-    if not seq:
-        return 0
-    mx = cur = 1
-    for i in range(1, len(seq)):
-        cur = cur + 1 if seq[i] == seq[i - 1] else 1
-        mx  = max(mx, cur)
-    return mx
+VALID_OPTIONS: frozenset[str] = frozenset({"A", "B", "C", "D"})
 
-def _trait_weights(answers: dict) -> dict:
-    tw = {t: [] for t in TRAITS}
-    for qid, opt in answers.items():
-        q = Q_LOOKUP.get(qid)
-        if q and opt in OPTION_KEYS:
-            tw[q['trait']].append(_get_weight(qid, opt))
-    return tw
+# Build a lookup from question id → question dict once at import time.
+_Q_LOOKUP: dict[str, dict] = {q["id"]: q for q in QUESTIONS}
 
-# ── OCEAN Scoring ────────────────────────────────────────────
 
-def compute_ocean_scores(answers: dict) -> dict:
+# ---------------------------------------------------------------------------
+# Step 1 — Encode raw answers to float weights
+# ---------------------------------------------------------------------------
+
+def encode_answers(answers: dict) -> tuple[dict, list]:
     """
-    answers: {question_id: 'A'|'B'|'C'|'D'}
-    Returns OCEAN scores 0–100.
-    Neuroticism inverted: 100 = emotionally stable.
+    Convert raw letter answers to per-question float weights.
+
+    Parameters
+    ----------
+    answers : dict
+        {question_id: 'A'|'B'|'C'|'D'}
+
+    Returns
+    -------
+    encoded : dict
+        {question_id: float (0–1)} — only for valid question/option pairs.
+    questions_used : list
+        Question dicts corresponding to every key in `encoded`.
+
+    Invalid question IDs and invalid option letters are silently ignored.
     """
-    tw = _trait_weights(answers)
-    ocean = {}
-    for trait, weights in tw.items():
-        if not weights:
-            ocean[trait] = 50.0
+    encoded: dict[str, float] = {}
+    questions_used: list[dict] = []
+
+    for qid, option in answers.items():
+        if option not in VALID_OPTIONS:
             continue
-        score = (sum(weights) / len(weights)) * 100
-        if trait in INVERTED_TRAITS:
-            score = 100 - score
-        ocean[trait] = round(score, 1)
-    return ocean
-
-def ocean_to_mbti(ocean: dict) -> str:
-    return (
-        ('E' if ocean['Extraversion']      >= 50 else 'I') +
-        ('N' if ocean['Openness']          >= 50 else 'S') +
-        ('F' if ocean['Agreeableness']     >= 50 else 'T') +
-        ('J' if ocean['Conscientiousness'] >= 50 else 'P')
-    )
-
-# ── Pillar 1: Internal Consistency (Cronbach's Alpha) ────────
-
-def _cronbach_alpha(weights: list) -> float:
-    """
-    Estimates alpha via inter-item correlation proxy:
-        r̄ estimated from within-trait weight spread
-        α = (k × r̄) / (1 + (k-1) × r̄)
-    Low spread = high consistency = high alpha.
-    """
-    k = len(weights)
-    if k < 2:
-        return 0.65
-    if len(set(weights)) == 1:
-        return 1.0
-
-    sd    = stdev(weights)
-    # Max meaningful std on 0.1–0.9 weight scale ≈ 0.4
-    r_bar = _clamp(1.0 - (sd / 0.4))
-    denom = 1 + (k - 1) * r_bar
-    alpha = (k * r_bar) / denom if denom > 0 else 0.0
-    return _clamp(float(alpha))
-
-def compute_c1_consistency(answers: dict) -> dict:
-    """
-    Per-trait alpha → C1 score (0–1):
-        C1 = clamp((α − 0.50) / 0.40)
-    α=0.50 → C1=0.0 | α=0.70 → C1=0.5 | α=0.90 → C1=1.0
-    """
-    tw = _trait_weights(answers)
-    c1_scores, alphas = {}, {}
-    for trait, weights in tw.items():
-        alpha            = _cronbach_alpha(weights)
-        alphas[trait]    = round(alpha, 3)
-        c1_scores[trait] = round(_clamp((alpha - 0.50) / 0.40), 3)
-    return {'scores': c1_scores, 'alphas': alphas}
-
-# ── Pillar 2: Behavioral Quality ─────────────────────────────
-
-def compute_c2_behavior(answers: dict, response_times_ms: dict) -> dict:
-    """
-    Three indicators:
-
-    RT score (0.40)
-        Flags responses that are too fast (<1.5s) or distracted (>90s).
-        Normal range 3–30s gets no penalty.
-
-    Straight-lining score (0.35)
-        Detects long runs of the same option.
-        Threshold scales with n_questions:
-            suspicious  ≥ max(4, n×0.30)
-            strong IER  ≥ max(7, n×0.50)
-        FIX: Raised thresholds vs original — 25Q format needs higher tolerance.
-
-    IRV score (0.25)
-        FIX: IRV now rewards moderate variance, not high variance.
-        A consistent responder (clear personality) has low-moderate IRV — good.
-        Near-zero IRV is only penalised when straight-lining is also detected.
-        Very high IRV (purely random) is also penalised.
-        Optimal range: 0.8–1.3 stdev on the 4-option scale.
-    """
-    ordered_ids  = list(answers.keys())
-    ordered_opts = [answers[qid] for qid in ordered_ids]
-    n            = len(ordered_ids)
-
-    # ── RT Score ────────────────────────────────────────────
-    flags = 0.0
-    rt_detail = {}
-    for qid in ordered_ids:
-        t_ms = response_times_ms.get(qid)
-        if t_ms is None or t_ms <= 0:
-            rt_detail[qid] = 'no_data'
+        question = _Q_LOOKUP.get(qid)
+        if question is None:
             continue
-        t = t_ms / 1000.0
-        if t < 1.5:
-            flags += 1.0
-            rt_detail[qid] = 'too_fast'
-        elif t < 3.0:
-            flags += 0.3
-            rt_detail[qid] = 'fast'
-        elif t > 90.0:
-            flags += 0.5
-            rt_detail[qid] = 'distracted'
-        else:
-            rt_detail[qid] = 'normal'
+        weight_key = f"weight_{option}"
+        raw_weight = question.get(weight_key)
+        if raw_weight is None:
+            continue
+        try:
+            weight = float(raw_weight)
+        except (TypeError, ValueError):
+            continue
+        encoded[qid] = weight
+        questions_used.append(question)
 
-    rt_score = _clamp(1.0 - (flags / n)) if n > 0 else 0.75
+    return encoded, questions_used
 
-    # ── Straight-lining Score ────────────────────────────────
-    # Scale thresholds with question count to avoid over-penalising
-    # short consistent assessments
-    max_run           = _longest_run(ordered_opts)
-    suspicious_thresh = max(4, int(n * 0.30))   # e.g. 25Q → 7
-    strong_ier_thresh = max(7, int(n * 0.50))   # e.g. 25Q → 12
 
-    if max_run >= strong_ier_thresh:
-        str_score = _clamp(1.0 - (max_run / strong_ier_thresh))
-    elif max_run >= suspicious_thresh:
-        # Partial penalty between thresholds
-        ratio     = (max_run - suspicious_thresh) / (strong_ier_thresh - suspicious_thresh)
-        str_score = _clamp(1.0 - 0.5 * ratio)
-    else:
-        str_score = 1.0   # no straight-lining detected
+# ---------------------------------------------------------------------------
+# Step 2 — Group encoded weights by OCEAN trait
+# ---------------------------------------------------------------------------
 
-    # ── IRV Score ────────────────────────────────────────────
-    # Map A=1 B=2 C=3 D=4 and compute stdev across all responses
-    option_nums = [OPTION_KEYS.index(o) + 1 for o in ordered_opts if o in OPTION_KEYS]
-
-    if len(option_nums) < 2:
-        irv       = 0.0
-        irv_score = 0.75
-    else:
-        irv = stdev(option_nums)
-
-        # FIX: Reward moderate variability. Penalise extremes.
-        # Optimal stdev ≈ 0.8–1.3 (using 2 or 3 of the 4 options consistently)
-        # Near-zero: suspicious only if combined with straight-lining
-        # Very high (>1.5): may indicate random clicking
-
-        if irv < 0.3:
-            # Near-zero variance — straight-lining caught above; give small penalty
-            # but only if straight-lining is also suspicious
-            irv_score = 0.6 if max_run >= suspicious_thresh else 0.8
-        elif irv <= 1.4:
-            # Healthy moderate range → full score
-            irv_score = 1.0
-        else:
-            # High variance — possible random clicking
-            irv_score = _clamp(1.0 - (irv - 1.4) / 0.8)
-
-    # ── Composite C2 ────────────────────────────────────────
-    c2 = 0.40 * rt_score + 0.35 * str_score + 0.25 * irv_score
-
-    return {
-        'score':     round(_clamp(c2), 3),
-        'rt_score':  round(rt_score, 3),
-        'str_score': round(str_score, 3),
-        'irv_score': round(irv_score, 3),
-        'max_run':   max_run,
-        'irv':       round(irv, 3),
-        'rt_flags':  round(flags, 2),
-        'rt_detail': rt_detail,
-    }
-
-# ── Pillar 3: Statistical Stability (Stubbed) ────────────────
-
-def compute_c3_stability(_answers: dict) -> dict:
+def group_by_trait(encoded: dict, questions_used: list) -> dict[str, list[float]]:
     """
-    Stubbed at 0.75 (neutral-good) until calibration sample is available.
-    FIX: Changed from 0.65 → 0.75 to avoid artificially depressing
-    overall confidence while P3 is not yet implemented.
-    Phase 3 will implement z-score extremity penalty and variance analysis.
+    Bucket encoded answer weights by their OCEAN trait.
+
+    Parameters
+    ----------
+    encoded : dict
+        {question_id: float} as returned by encode_answers().
+    questions_used : list
+        Parallel list of question dicts (same order is not required).
+
+    Returns
+    -------
+    dict mapping each full trait name → list of float weights.
+    Traits with no answers map to an empty list.
+
+    Short trait codes ("O", "C", …) and full names ("Openness", …) are
+    both accepted in the question's "trait" field.
     """
-    return {
-        'score': 0.75,
-        'note':  'Pending calibration sample (Phase 3) — currently neutral',
-    }
+    groups: dict[str, list[float]] = {t: [] for t in TRAITS}
 
-# ── Master Confidence Builder ────────────────────────────────
+    for question in questions_used:
+        qid = question.get("id")
+        if qid not in encoded:
+            continue
+        raw_trait = question.get("trait", "")
+        full_trait = SHORT_TO_FULL.get(raw_trait, raw_trait)
+        if full_trait not in groups:
+            continue
+        groups[full_trait].append(encoded[qid])
 
-def compute_confidence(answers: dict, response_times_ms: dict = None) -> dict:
-    rts = response_times_ms or {}
+    return groups
 
-    c1 = compute_c1_consistency(answers)
-    c2 = compute_c2_behavior(answers, rts)
-    c3 = compute_c3_stability(answers)
 
-    c1_scores = c1['scores']
-    c2_global = c2['score']
-    c3_global = c3['score']
+# ---------------------------------------------------------------------------
+# Step 3 — Compute per-trait scores (0–100) and breakdown
+# ---------------------------------------------------------------------------
 
-    per_trait = {}
+def compute_trait_scores(groups: dict[str, list[float]]) -> tuple[dict, dict]:
+    """
+    Convert per-trait weight lists into OCEAN scores (0–100).
+
+    Scoring:
+      mean  = sum(weights) / count      [0–1]
+      score = mean × 100                [0–100]
+      score is clamped to [0, 100].
+
+    Traits with zero answers receive a neutral score of 50.0.
+
+    Parameters
+    ----------
+    groups : dict
+        {full_trait_name: [float, ...]} as returned by group_by_trait().
+
+    Returns
+    -------
+    ocean_scores : dict
+        {trait: float (0–100)}
+    trait_breakdown : dict
+        {trait: {"mean": float (0–1), "count": int}}
+    """
+    ocean_scores: dict[str, float] = {}
+    trait_breakdown: dict[str, dict] = {}
+
     for trait in TRAITS:
-        c1_t = c1_scores.get(trait, 0.5)
-        per_trait[trait] = round(_clamp(W1 * c1_t + W2 * c2_global + W3 * c3_global), 3)
+        values = groups.get(trait, [])
+        count = len(values)
 
-    overall = round(mean(per_trait.values()), 3)
+        if count == 0:
+            mean_weight = 0.5   # neutral
+            score = 50.0
+        else:
+            mean_weight = sum(values) / count
+            score = max(0.0, min(100.0, mean_weight * 100.0))
 
-    return {
-        'overall':             overall,
-        'per_trait':           per_trait,
-        'needs_clarification': overall < 0.75,
-        'pillar_1': {
-            'label':  'Internal Consistency (Cronbach α)',
-            'scores': c1_scores,
-            'alphas': c1['alphas'],
-        },
-        'pillar_2': {
-            'label':     'Behavioral Quality',
-            'score':     c2_global,
-            'rt_score':  c2['rt_score'],
-            'str_score': c2['str_score'],
-            'irv_score': c2['irv_score'],
-            'max_run':   c2['max_run'],
-            'irv':       c2['irv'],
-            'rt_flags':  c2['rt_flags'],
-        },
-        'pillar_3': {
-            'label': 'Statistical Stability',
-            'score': c3_global,
-            'note':  c3['note'],
-        },
-    }
+        ocean_scores[trait] = round(score, 1)
+        trait_breakdown[trait] = {
+            "mean": round(mean_weight, 4),
+            "count": count,
+        }
 
-# ── Full Profile Builder ──────────────────────────────────────
+    return ocean_scores, trait_breakdown
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
 def build_profile(
     user_type: str,
     inst_id: str,
     answers: dict,
-    response_times_ms: dict = None,
+    response_times_ms: dict,
 ) -> dict:
-    ocean      = compute_ocean_scores(answers)
-    confidence = compute_confidence(answers, response_times_ms or {})
-    mbti       = ocean_to_mbti(ocean)
+    """
+    Convert raw assessment answers into a complete OCEAN profile.
+
+    Parameters
+    ----------
+    user_type : str
+        Caller-supplied user classification (stored verbatim in meta).
+    inst_id : str
+        Institution identifier (stored verbatim in meta).
+    answers : dict
+        {question_id: 'A'|'B'|'C'|'D'} — raw letter answers.
+    response_times_ms : dict
+        {question_id: int (ms)} — time taken per question.
+
+    Returns
+    -------
+    {
+      "ocean_scores": {
+          "Openness":          float (0–100),
+          "Conscientiousness": float (0–100),
+          "Extraversion":      float (0–100),
+          "Agreeableness":     float (0–100),
+          "Neuroticism":       float (0–100),
+      },
+      "trait_breakdown": {
+          <trait>: {"mean": float (0–1), "count": int},
+          ...
+      },
+      "confidence": <output of compute_confidence()>,
+      "meta": {
+          "institution_id": str,
+          "user_type":      str,
+          "total_answered": int,
+      },
+    }
+
+    Never raises.  Invalid answers and unknown question IDs are silently
+    dropped; the function always returns a complete, valid structure.
+    """
+    # Guard: ensure inputs are the expected types
+    if not isinstance(answers, dict):
+        answers = {}
+    if not isinstance(response_times_ms, dict):
+        response_times_ms = {}
+
+    # ── 1. Encode ────────────────────────────────────────────────────────
+    encoded, questions_used = encode_answers(answers)
+
+    # ── 2. Group ─────────────────────────────────────────────────────────
+    groups = group_by_trait(encoded, questions_used)
+
+    # ── 3. Score ─────────────────────────────────────────────────────────
+    ocean_scores, trait_breakdown = compute_trait_scores(groups)
+
+    # ── 4. Confidence ────────────────────────────────────────────────────
+    confidence = compute_confidence(encoded, questions_used, response_times_ms)
+
+    # ── 5. Assemble ──────────────────────────────────────────────────────
     return {
-        'institution_id':      inst_id,
-        'user_type':           user_type,
-        'ocean_scores':        ocean,
-        'mbti_display':        mbti,
-        'confidence':          confidence,
-        'needs_clarification': confidence['overall'] < 0.75,
-        'questions_answered':  len(answers),
-        'profile_complete':    True,
+        "ocean_scores":    ocean_scores,
+        "trait_breakdown": trait_breakdown,
+        "confidence":      confidence,
+        "meta": {
+            "institution_id": inst_id,
+            "user_type":      user_type,
+            "total_answered": len(encoded),
+        },
     }
