@@ -23,7 +23,7 @@ from careers.recommender import get_career_detail, recommend_careers
 # Router
 # ---------------------------------------------------------------------------
 
-router = APIRouter(prefix="/api/v1/careers", tags=["careers"])
+router = APIRouter(tags=["careers"])
 
 # ---------------------------------------------------------------------------
 # Constants

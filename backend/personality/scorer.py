@@ -75,6 +75,10 @@ def encode_answers(answers: dict) -> tuple[dict, list]:
             weight = float(raw_weight)
         except (TypeError, ValueError):
             continue
+
+        if question.get("reverse", False):
+         weight = 1.25 - weight
+
         encoded[qid] = weight
         questions_used.append(question)
 

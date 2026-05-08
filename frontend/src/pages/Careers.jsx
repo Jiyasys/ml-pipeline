@@ -1,7 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import axios from "axios";
 
-const API = "http://127.0.0.1:8000/api";
+const API = import.meta.env.VITE_API_URL;
 
 const SOURCE_LABELS = { onet: "Global", indian: "India", hybrid: "Hybrid" };
 const SOURCE_COLORS = { onet: "#4c9ac9", indian: "#c9a84c", hybrid: "#4cc97a" };
@@ -9,6 +9,23 @@ const TRAIT_COLORS  = {
   Openness: "#c9a84c", Conscientiousness: "#4c9ac9",
   Extraversion: "#c94c7a", Agreeableness: "#4cc97a", Neuroticism: "#9a4cc9",
 };
+
+const LOW_CONFIDENCE_THRESHOLD = 0.65;
+
+// ── Helpers ───────────────────────────────────────────────────
+
+function cloneSort(arr, compareFn) {
+  return [...arr].sort(compareFn);
+}
+
+function isValidProfile(profile) {
+  return (
+    profile &&
+    profile.ocean_scores &&
+    typeof profile.ocean_scores === "object" &&
+    profile.user_type
+  );
+}
 
 // ── Sub-components ────────────────────────────────────────────
 
@@ -80,17 +97,43 @@ function CareerCard({ career, ocean_scores }) {
   const [expanded, setExpanded] = useState(false);
   const [detail,   setDetail]   = useState(null);
   const [loading,  setLoading]  = useState(false);
+  const [error,    setError]    = useState(null);
+  const cancelRef = useRef(null);
+
+  useEffect(() => {
+    return () => { cancelRef.current?.abort(); };
+  }, []);
 
   const toggle = async () => {
     if (expanded) { setExpanded(false); return; }
     if (detail)   { setExpanded(true);  return; }
+
+    cancelRef.current?.abort();
+    const controller = new AbortController();
+    cancelRef.current = controller;
+
     setLoading(true);
+    setError(null);
+
     try {
-      const res = await axios.post(`${API}/careers/${career.id}`, { ocean_scores });
+      const res = await axios.post(
+        `${API}/careers/${career.id}`,
+        { ocean_scores },
+        { signal: controller.signal }
+      );
       setDetail(res.data);
-    } catch { setDetail(career); }
-    setLoading(false);
-    setExpanded(true);
+      setExpanded(true);
+    } catch (err) {
+      if (axios.isCancel(err) || err?.code === "ERR_CANCELED") return;
+      setError("Could not load career details. Tap to retry.");
+      // Do NOT expand on failure — card stays collapsed
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
   };
 
   return (
@@ -100,8 +143,15 @@ function CareerCard({ career, ocean_scores }) {
       borderRadius: "var(--radius)", overflow: "hidden",
       transition: "border-color 0.25s", marginBottom: 12,
     }}>
-      {/* Header row */}
-      <div onClick={toggle} style={{ display: "flex", alignItems: "flex-start", gap: 16, padding: "18px 20px", cursor: "pointer" }}>
+      {/* Header row — keyboard accessible */}
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={toggle}
+        onKeyDown={handleKeyDown}
+        aria-expanded={expanded}
+        style={{ display: "flex", alignItems: "flex-start", gap: 16, padding: "18px 20px", cursor: "pointer", outline: "none" }}
+      >
         <FitBadge score={career.fit_score} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
@@ -128,34 +178,35 @@ function CareerCard({ career, ocean_scores }) {
           {career.entrance_exam && (
             <div style={{ fontSize: 11, color: "var(--gold)", opacity: 0.85 }}>📋 {career.entrance_exam}</div>
           )}
+          {/* Inline error shown below card summary, not in expanded panel */}
+          {error && !loading && (
+            <div style={{ fontSize: 12, color: "#c94c4c", marginTop: 6 }}>{error}</div>
+          )}
         </div>
-        <div style={{ color: "var(--muted)", fontSize: 16, transition: "transform 0.25s", transform: expanded ? "rotate(180deg)" : "none", paddingTop: 2 }}>⌄</div>
+        <div style={{
+          color: "var(--muted)", fontSize: 16, transition: "transform 0.25s",
+          transform: expanded ? "rotate(180deg)" : "none", paddingTop: 2,
+          display: "flex", alignItems: "center",
+        }}>
+          {loading ? <div className="spinner" style={{ width: 14, height: 14 }} /> : "⌄"}
+        </div>
       </div>
 
-      {/* Expanded detail */}
-      {expanded && (
+      {/* Expanded detail — only rendered on successful fetch */}
+      {expanded && detail && (
         <div style={{ borderTop: "1px solid rgba(201,168,76,0.08)", padding: "18px 20px", animation: "fadeUp 0.3s ease" }}>
-          {loading ? (
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <div className="spinner" style={{ width: 18, height: 18 }} />
-              <span style={{ fontSize: 12, color: "var(--muted)" }}>Loading breakdown…</span>
+          <p style={{ fontSize: 13, color: "var(--cream2)", lineHeight: 1.7, marginBottom: 16 }}>
+            {detail.explanation || career.explanation}
+          </p>
+          {detail.trait_breakdown && (
+            <div>
+              <div style={{ fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 12 }}>
+                Trait Alignment
+              </div>
+              {detail.trait_breakdown.map(t => (
+                <TraitRow key={t.trait} trait={t.trait} userScore={t.user_score} idealScore={t.career_ideal} />
+              ))}
             </div>
-          ) : (
-            <>
-              <p style={{ fontSize: 13, color: "var(--cream2)", lineHeight: 1.7, marginBottom: 16 }}>
-                {detail?.explanation || career.explanation}
-              </p>
-              {detail?.trait_breakdown && (
-                <div>
-                  <div style={{ fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 12 }}>
-                    Trait Alignment
-                  </div>
-                  {detail.trait_breakdown.map(t => (
-                    <TraitRow key={t.trait} trait={t.trait} userScore={t.user_score} idealScore={t.career_ideal} />
-                  ))}
-                </div>
-              )}
-            </>
           )}
         </div>
       )}
@@ -165,39 +216,64 @@ function CareerCard({ career, ocean_scores }) {
 
 // ── Main page ─────────────────────────────────────────────────
 
-export default function Careers({ profile, onBack }) {
-  const [careers,    setCareers]    = useState([]);
-  const [loading,    setLoading]    = useState(true);
-  const [categories, setCategories] = useState([]);
+export default function Careers({ profile, recommendations: propRecs, onBack, onClarify }) {
+  const [careers,    setCareers]    = useState(propRecs || []);
+  const [loading,    setLoading]    = useState(!propRecs);
+  const [error,      setError]      = useState(null);
+  const [categories, setCategories] = useState(["All"]);
   const [activeCat,  setActiveCat]  = useState("All");
   const [activeSrc,  setActiveSrc]  = useState("All");
   const [sortBy,     setSortBy]     = useState("fit");
 
   const ocean_scores = profile?.ocean_scores;
   const user_type    = profile?.user_type;
+  const confidence   = profile?.confidence?.overall;
+  const showLowConfidenceWarning = typeof confidence === "number" && confidence < LOW_CONFIDENCE_THRESHOLD;
 
-  useEffect(() => {
-    if (!ocean_scores || !user_type) return;
-    axios.post(`${API}/careers/recommend`, {
-      ocean_scores, user_type, top_n: 50, min_fit_score: 60,
-    })
-    .then(res => {
+  const buildCategories = useCallback((recs) => {
+    setCategories(["All", ...new Set(recs.map(c => c.category).filter(Boolean))]);
+  }, []);
+
+  const fetchCareers = useCallback(async () => {
+    if (!isValidProfile(profile)) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await await axios.post(`${API}/careers/recommend`, {
+  ocean_scores,
+  user_type,
+  top_n: 50,
+});
       const recs = res.data.recommendations || [];
       setCareers(recs);
-      setCategories(["All", ...new Set(recs.map(c => c.category))]);
+      buildCategories(recs);
+    } catch {
+      setError("Could not load career recommendations. Please try again.");
+    } finally {
       setLoading(false);
-    })
-    .catch(() => setLoading(false));
-  }, []);
+    }
+  }, [ocean_scores, user_type, profile, buildCategories]);
+
+  useEffect(() => {
+    if (propRecs) {
+      buildCategories(propRecs);
+      return;
+    }
+    fetchCareers();
+  }, [propRecs, fetchCareers, buildCategories]);
 
   const dominant = Object.entries(ocean_scores || {})
     .sort((a, b) => b[1] - a[1]).slice(0, 2)
     .filter(([, v]) => v >= 60).map(([t]) => t);
 
-  const filtered = careers
-    .filter(c => activeCat === "All" || c.category === activeCat)
-    .filter(c => activeSrc === "All" || c.source   === activeSrc)
-    .sort((a, b) => sortBy === "fit" ? b.fit_score - a.fit_score : a.name.localeCompare(b.name));
+  const filtered = cloneSort(
+    careers
+      .filter(c => activeCat === "All" || c.category === activeCat)
+      .filter(c => activeSrc === "All" || c.source   === activeSrc),
+    sortBy === "fit"
+      ? (a, b) => b.fit_score - a.fit_score
+      : (a, b) => a.name.localeCompare(b.name)
+  );
 
   return (
     <div style={{ minHeight: "100vh", paddingBottom: 80 }}>
@@ -228,6 +304,27 @@ export default function Careers({ profile, onBack }) {
 
       <div style={{ maxWidth: 860, margin: "0 auto", padding: "32px 40px 0" }}>
 
+        {/* Low confidence warning */}
+        {showLowConfidenceWarning && (
+          <div style={{
+            background: "rgba(201,168,76,0.05)", border: "1px solid rgba(201,168,76,0.18)",
+            borderRadius: "var(--radius)", padding: "12px 18px", marginBottom: 20,
+            display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 15 }}>ℹ</span>
+              <span style={{ fontSize: 12, color: "var(--muted)" }}>
+                Some recommendations may benefit from additional clarification questions.
+              </span>
+            </div>
+            {onClarify && (
+              <button className="btn-ghost" onClick={onClarify} style={{ fontSize: 11, padding: "5px 12px", whiteSpace: "nowrap" }}>
+                Clarify answers
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Dominant traits banner */}
         {dominant.length > 0 && (
           <div style={{
@@ -237,7 +334,7 @@ export default function Careers({ profile, onBack }) {
           }}>
             <span style={{ fontSize: 18 }}>✦</span>
             <span style={{ fontSize: 13, color: "var(--cream2)" }}>
-              Matches driven by:{" "}
+              Strong matches aligned with:{" "}
               {dominant.map((t, i) => (
                 <span key={t}>
                   {i > 0 && <span style={{ color: "var(--muted)" }}> & </span>}
@@ -275,11 +372,27 @@ export default function Careers({ profile, onBack }) {
           </div>
         </div>
 
-        {/* Cards */}
+        {/* Cards / states */}
         {loading ? (
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16, padding: "80px 0" }}>
             <div className="spinner" />
-            <span style={{ fontSize: 14, color: "var(--muted)" }}>Finding your career matches…</span>
+            <span style={{ fontSize: 14, color: "var(--muted)" }}>Finding aligned career paths…</span>
+          </div>
+        ) : error ? (
+          <div style={{ textAlign: "center", padding: "80px 0" }}>
+            <div style={{ fontSize: 32, marginBottom: 12 }}>⚠</div>
+            <div style={{ fontSize: 15, color: "#c94c4c", marginBottom: 16 }}>{error}</div>
+            <button className="btn-ghost" onClick={fetchCareers}>Retry</button>
+          </div>
+        ) : careers.length === 0 ? (
+          <div style={{ textAlign: "center", padding: "80px 0" }}>
+            <div style={{ fontSize: 32, marginBottom: 12 }}>🔍</div>
+            <div style={{ fontSize: 15, color: "var(--muted)", marginBottom: 8 }}>
+              No career matches were returned for your profile.
+            </div>
+            <div style={{ fontSize: 13, color: "var(--muted)", opacity: 0.7 }}>
+              Try completing additional questions to sharpen your results.
+            </div>
           </div>
         ) : filtered.length === 0 ? (
           <div style={{ textAlign: "center", padding: "80px 0" }}>

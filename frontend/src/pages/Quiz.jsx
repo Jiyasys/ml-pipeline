@@ -1,230 +1,401 @@
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 
-const API    = "http://127.0.0.1:8000/api/personality";
-const INST   = "inst_001";
-const OPTS   = ["A", "B", "C", "D"];
+const BASE = import.meta.env.VITE_API_URL;
+const API = `${BASE}/personality`;
 
-const TRAIT_COLORS = {
-  Openness:          "#c9a84c",
-  Conscientiousness: "#4c9ac9",
-  Extraversion:      "#c94c7a",
-  Agreeableness:     "#4cc97a",
-  Neuroticism:       "#9a4cc9",
-};
+const LOW_CONFIDENCE_THRESHOLD = 0.65;
 
 export default function Quiz({ userType, onComplete }) {
-  const [questions, setQuestions]     = useState([]);
-  const [current, setCurrent]         = useState(0);
-  const [answers, setAnswers]         = useState({});
-  const [responseTimes, setResponseTimes] = useState({});  // {qid: ms}
-  const [selected, setSelected]       = useState(null);
-  const [loading, setLoading]         = useState(true);
-  const [submitting, setSubmitting]   = useState(false);
-  const [error, setError]             = useState(null);
+  const [questions, setQuestions] = useState([]);
+  const [current, setCurrent] = useState(0);
 
-  // Timestamp when current question was shown
-  const questionStartRef = useRef(null);
+  const [answers, setAnswers] = useState({});
+  const [responseTimes, setResponseTimes] = useState({});
 
-  // Fetch questions on mount
-  useEffect(() => {
-    axios.post(`${API}/questions`, {
-      user_type: userType,
-      inst_id:   INST,
-      mode:      "fast",
-    })
-    .then(res => {
-      setQuestions(res.data.questions);
-      setLoading(false);
+  const [selected, setSelected] = useState(null);
+
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+
+  const [error, setError] = useState("");
+
+  const [clarificationMode, setClarificationMode] = useState(false);
+
+  const questionStartRef = useRef(Date.now());
+  const hiddenAtRef = useRef(null);
+
+  const currentQuestion = questions[current];
+
+  const progress = useMemo(() => {
+    if (!questions.length) return 0;
+    return ((current + 1) / questions.length) * 100;
+  }, [current, questions.length]);
+
+  // ───────────────────────────────────────────────────────────
+  // Load Questions
+  // ───────────────────────────────────────────────────────────
+
+  const loadQuestions = async () => {
+    try {
+      setLoading(true);
+      setError("");
+
+      const res = await axios.post(`${API}/questions`, {
+        user_type: userType,
+        inst_id: "frontend-web",
+        mode: "fast",
+        seed: 42,
+      });
+
+      setQuestions(res.data.questions || []);
+      setCurrent(0);
+
       questionStartRef.current = Date.now();
-    })
-    .catch(() => {
-      setError("Could not load questions. Is the backend running?");
-      setLoading(false);
-    });
-  }, [userType]);
+    } catch (err) {
+      console.error(err?.response?.data || err);
 
-  // Reset timer whenever question index changes
-  useEffect(() => {
-    if (!loading) {
-      questionStartRef.current = Date.now();
-      // Restore previously selected answer if navigating back
-      if (questions[current]) {
-        setSelected(answers[questions[current].id] || null);
-      }
+      setError("Could not load questions. Please try again.");
+    } finally {
+      setLoading(false);
     }
-  }, [current, loading]);
+  };
 
-  const q      = questions[current];
-  const color  = TRAIT_COLORS[q?.trait] || "var(--gold)";
-  const pct    = questions.length > 0
-    ? Math.round((current / questions.length) * 100)
-    : 0;
+  // ───────────────────────────────────────────────────────────
+  // Visibility Handling
+  // ───────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.hidden) {
+        hiddenAtRef.current = Date.now();
+      } else {
+        if (hiddenAtRef.current) {
+          const hiddenDuration =
+            Date.now() - hiddenAtRef.current;
+
+          questionStartRef.current += hiddenDuration;
+
+          hiddenAtRef.current = null;
+        }
+      }
+    };
+
+    document.addEventListener(
+      "visibilitychange",
+      handleVisibility
+    );
+
+    return () => {
+      document.removeEventListener(
+        "visibilitychange",
+        handleVisibility
+      );
+    };
+  }, []);
+
+  // ───────────────────────────────────────────────────────────
+  // Initial Load
+  // ───────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    loadQuestions();
+  }, []);
+
+  // ───────────────────────────────────────────────────────────
+  // Helpers
+  // ───────────────────────────────────────────────────────────
 
   const recordTime = (qid) => {
-    const elapsed = Date.now() - (questionStartRef.current || Date.now());
-    setResponseTimes(prev => ({ ...prev, [qid]: elapsed }));
+    const elapsed =
+      Date.now() - questionStartRef.current;
+
+    // Ignore absurd outliers
+    if (elapsed > 30000) return;
+
+    setResponseTimes((prev) => ({
+      ...prev,
+      [qid]: elapsed,
+    }));
   };
 
-  const handleSelect = (opt) => setSelected(opt);
+  const moveNext = () => {
+    setSelected(null);
 
-  const handleNext = async () => {
-    if (!selected) return;
-
-    // Record how long this question took
-    recordTime(q.id);
-
-    const newAnswers = { ...answers, [q.id]: selected };
-    setAnswers(newAnswers);
-
-    if (current + 1 < questions.length) {
-      setCurrent(current + 1);
-      setSelected(null);
-    } else {
-      // Last question — submit everything
-      setSubmitting(true);
-      try {
-        // Merge the last timing record before submitting
-        const finalTimes = {
-          ...responseTimes,
-          [q.id]: Date.now() - (questionStartRef.current || Date.now()),
-        };
-        const res = await axios.post(`${API}/submit`, {
-          user_type:         userType,
-          inst_id:           INST,
-          answers:           newAnswers,
-          response_times_ms: finalTimes,
-        });
-        onComplete(res.data);
-      } catch (e) {
-        setError("Submission failed. Please try again.");
-        setSubmitting(false);
-      }
+    if (current < questions.length - 1) {
+      setCurrent((prev) => prev + 1);
+      questionStartRef.current = Date.now();
     }
   };
+
+  // ───────────────────────────────────────────────────────────
+  // Submit Logic
+  // ───────────────────────────────────────────────────────────
+
+  const submitAssessment = async (
+    finalAnswers,
+    finalTimes,
+    isClarification = false
+  ) => {
+    try {
+      setSubmitting(true);
+      setError("");
+
+      const profileRes = await axios.post(
+        `${API}/submit`,
+        {
+          user_type: userType,
+          inst_id: "frontend-web",
+          mode: "fast",
+          answers: finalAnswers,
+          response_times_ms: finalTimes,
+        }
+      );
+
+      const profile = profileRes.data;
+
+      const overallConfidence =
+        profile?.confidence?.overall ?? 1;
+
+      // Clarification round
+      if (
+        !isClarification &&
+        overallConfidence < LOW_CONFIDENCE_THRESHOLD
+      ) {
+        const clarifyRes = await axios.post(
+          `${API}/clarify`,
+          {
+            user_type: userType,
+            ocean_scores: profile.ocean_scores,
+            confidences: {
+              Openness:
+                profile.confidence.Openness,
+              Conscientiousness:
+                profile.confidence
+                  .Conscientiousness,
+              Extraversion:
+                profile.confidence
+                  .Extraversion,
+              Agreeableness:
+                profile.confidence
+                  .Agreeableness,
+              Neuroticism:
+                profile.confidence
+                  .Neuroticism,
+            },
+            existing_answers: finalAnswers,
+          }
+        );
+
+        const clarifyQuestions =
+          clarifyRes.data
+            ?.clarification_questions || [];
+
+        if (clarifyQuestions.length > 0) {
+          setClarificationMode(true);
+
+          setQuestions(clarifyQuestions);
+          setCurrent(0);
+
+          questionStartRef.current = Date.now();
+
+          return;
+        }
+      }
+
+      onComplete(profile);
+    } catch (err) {
+      console.error(err?.response?.data || err);
+
+      setError(
+        "Could not submit assessment. Please retry."
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // ───────────────────────────────────────────────────────────
+  // Answer Handling
+  // ───────────────────────────────────────────────────────────
+
+  const handleAnswer = async () => {
+    if (!selected || !currentQuestion) return;
+
+    const qid = currentQuestion.id;
+
+    recordTime(qid);
+
+    const updatedAnswers = {
+      ...answers,
+      [qid]: selected,
+    };
+
+    setAnswers(updatedAnswers);
+
+    const updatedTimes = {
+      ...responseTimes,
+      [qid]:
+        Date.now() - questionStartRef.current,
+    };
+
+    setResponseTimes(updatedTimes);
+
+    const isLast =
+      current === questions.length - 1;
+
+    if (!isLast) {
+      moveNext();
+      return;
+    }
+
+    await submitAssessment(
+      updatedAnswers,
+      updatedTimes,
+      clarificationMode
+    );
+  };
+
+  // ───────────────────────────────────────────────────────────
+  // Back
+  // ───────────────────────────────────────────────────────────
 
   const handleBack = () => {
     if (current === 0) return;
-    // Record time even when going back (counts as engagement)
-    recordTime(q.id);
-    setCurrent(current - 1);
+
+    setCurrent((prev) => prev - 1);
+
+    questionStartRef.current = Date.now();
+
+    const prevQ =
+      questions[current - 1];
+
+    setSelected(
+      answers[prevQ?.id] || null
+    );
   };
 
-  // ── States ────────────────────────────────────────────────
+  // ───────────────────────────────────────────────────────────
+  // Loading
+  // ───────────────────────────────────────────────────────────
 
-  if (loading) return <QuizShell><Spinner text="Preparing your assessment…" /></QuizShell>;
-  if (submitting) return <QuizShell><Spinner text="Analysing your responses…" /></QuizShell>;
-  if (error) return (
-    <QuizShell>
-      <p style={{ color: "var(--danger)", fontSize: 14 }}>{error}</p>
-    </QuizShell>
-  );
+  if (loading) {
+    return (
+      <div className="quiz-loading">
+        Loading questions...
+      </div>
+    );
+  }
+
+  // ───────────────────────────────────────────────────────────
+  // Error
+  // ───────────────────────────────────────────────────────────
+
+  if (error) {
+    return (
+      <div className="quiz-error">
+        <p>{error}</p>
+
+        <button onClick={loadQuestions}>
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  if (!currentQuestion) {
+    return (
+      <div className="quiz-error">
+        No questions available.
+      </div>
+    );
+  }
+
+  // ───────────────────────────────────────────────────────────
+  // Render
+  // ───────────────────────────────────────────────────────────
 
   return (
     <div className="quiz">
-      {/* Header */}
       <div className="quiz-header">
-        <div className="quiz-logo">EDWISerr</div>
-        <div className="quiz-meta">{current + 1} / {questions.length}</div>
-      </div>
-
-      {/* Progress bar */}
-      <div className="quiz-progress-bar">
-        <div
-          className="quiz-progress-fill"
-          style={{ width: `${pct}%`, background: color }}
-        />
-      </div>
-
-      {/* Body */}
-      <div className="quiz-body">
-        <div
-          className="quiz-trait-tag"
-          style={{ color, borderColor: `${color}44` }}
-        >
-          <span style={{
-            width: 6, height: 6, borderRadius: "50%",
-            background: color, display: "inline-block",
-          }} />
-          {q.trait} · {q.sub_dimension.replace(/_/g, " ")}
+        <div className="quiz-progress-wrap">
+          <div
+            className="quiz-progress"
+            style={{
+              width: `${progress}%`,
+            }}
+          />
         </div>
 
-        <div className="quiz-question">{q.scenario}</div>
+        <div className="quiz-counter">
+          Question {current + 1} /{" "}
+          {questions.length}
+        </div>
+
+        {clarificationMode && (
+          <div className="clarify-banner">
+            Additional clarification
+            questions to improve confidence.
+          </div>
+        )}
+      </div>
+
+      <div className="quiz-card">
+        <div className="quiz-scenario">
+          {currentQuestion.scenario}
+        </div>
 
         <div className="quiz-options">
-          {OPTS.map(opt => (
-            <button
-              key={opt}
-              className={`quiz-option${selected === opt ? " selected" : ""}`}
-              onClick={() => handleSelect(opt)}
-              style={selected === opt
-                ? { borderColor: color, background: `${color}12` }
-                : {}}
-            >
-              <span
-                className="option-letter"
-                style={selected === opt
-                  ? { background: color, borderColor: color, color: "var(--navy)" }
-                  : { color, borderColor: `${color}55` }}
+          {["A", "B", "C", "D"].map(
+            (key) => (
+              <button
+                key={key}
+                className={`quiz-option ${
+                  selected === key
+                    ? "selected"
+                    : ""
+                }`}
+                onClick={() =>
+                  setSelected(key)
+                }
+                disabled={submitting}
               >
-                {opt}
-              </span>
-              <span className="option-text">{q[`option_${opt}`]}</span>
-            </button>
-          ))}
+                {
+                  currentQuestion[
+                    `option_${key}`
+                  ]
+                }
+              </button>
+            )
+          )}
+        </div>
+
+        <div className="quiz-actions">
+          <button
+            onClick={handleBack}
+            disabled={
+              current === 0 ||
+              submitting
+            }
+          >
+            Back
+          </button>
+
+          <button
+            onClick={handleAnswer}
+            disabled={
+              !selected || submitting
+            }
+          >
+            {submitting
+              ? "Submitting..."
+              : current ===
+                questions.length - 1
+              ? "Finish"
+              : "Next"}
+          </button>
         </div>
       </div>
-
-      {/* Footer */}
-      <div className="quiz-footer">
-        <button
-          className="btn-ghost"
-          onClick={handleBack}
-          disabled={current === 0}
-          style={{ opacity: current === 0 ? 0.3 : 1 }}
-        >
-          ← Back
-        </button>
-        <button
-          className="btn-primary"
-          onClick={handleNext}
-          disabled={!selected}
-          style={{
-            opacity:    selected ? 1 : 0.4,
-            background: selected ? color : "var(--gold)",
-            cursor:     selected ? "pointer" : "not-allowed",
-          }}
-        >
-          {current + 1 === questions.length ? "See Results" : "Next"}
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-            <path d="M3 8h10M9 4l4 4-4 4"
-              stroke="currentColor" strokeWidth="1.5"
-              strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
-        </button>
-      </div>
     </div>
-  );
-}
-
-// ── Sub-components ────────────────────────────────────────────
-
-function QuizShell({ children }) {
-  return (
-    <div className="quiz">
-      <div className="quiz-header">
-        <div className="quiz-logo">EDWISerr</div>
-      </div>
-      <div className="quiz-loading">{children}</div>
-    </div>
-  );
-}
-
-function Spinner({ text }) {
-  return (
-    <>
-      <div className="spinner" />
-      <span style={{ color: "var(--muted)", fontSize: 14 }}>{text}</span>
-    </>
   );
 }
