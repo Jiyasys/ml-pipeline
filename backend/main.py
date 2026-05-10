@@ -10,8 +10,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from routers import personality
 from routers import careers
 from routers.insights_feedback import router as insights_router
-
-
+from db.database import init_db
+from routers import schools, sessions, questions
 
 # ============================================================
 # App
@@ -22,6 +22,9 @@ app = FastAPI(
     description="AI-powered career navigation backend",
     version="1.0.0",
 )
+app.include_router(schools.router)
+app.include_router(sessions.router)
+app.include_router(questions.router)
 
 
 # ============================================================
@@ -84,3 +87,4 @@ def root():
         "status": "Edwiserr API is running",
         "version": "1.0.0",
     }
+init_db()
