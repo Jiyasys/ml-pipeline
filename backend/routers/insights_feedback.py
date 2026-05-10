@@ -5,8 +5,12 @@ import logging
 from datetime import datetime, timezone
 from typing import Literal, Optional
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy.orm import Session
+
+from db.deps import get_db
+from models.models import InsightFeedback, ResponseSession
 
 logger = logging.getLogger("edwiserr.insights")
 router = APIRouter(tags=["insights"])
@@ -24,16 +28,16 @@ class OceanScores(BaseModel):
 
 
 class InsightFeedbackRequest(BaseModel):
-    response_session_id: Optional[int] = None
-    insight_id:          str  = Field(..., min_length=1, max_length=80)
-    insight_title:       str  = Field(..., min_length=1, max_length=200)
-    insight_text:        str  = Field(..., min_length=1, max_length=4000)
+    response_session_id: Optional[int]         = None
+    insight_id:          str                   = Field(..., min_length=1, max_length=80)
+    insight_title:       str                   = Field(..., min_length=1, max_length=200)
+    insight_text:        str                   = Field(..., min_length=1, max_length=4000)
     feedback_level:      FeedbackLevel
-    feedback_text:       Optional[str]        = Field(None, max_length=500)
+    feedback_text:       Optional[str]         = Field(None, max_length=500)
     ocean_scores:        Optional[OceanScores] = None
-    archetype_key:       Optional[str]        = Field(None, max_length=80)
-    user_type:           Optional[UserType]   = None
-    submitted_at:        Optional[datetime]   = None
+    archetype_key:       Optional[str]         = Field(None, max_length=80)
+    user_type:           Optional[UserType]    = None
+    submitted_at:        Optional[datetime]    = None
 
     @field_validator("insight_id")
     @classmethod
@@ -76,31 +80,62 @@ def _dominant_trait(scores: Optional[OceanScores]) -> Optional[str]:
     return max(values, key=lambda k: values[k]) if values else None
 
 
+def _save_to_db(
+    db: Session,
+    body: InsightFeedbackRequest,
+    feedback_id: str,
+    server_ts: datetime,
+) -> None:
+    if body.response_session_id is not None:
+        session_exists = db.get(ResponseSession, body.response_session_id)
+        if session_exists is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"ResponseSession id={body.response_session_id} not found.",
+            )
+
+    record = InsightFeedback(
+        response_session_id=body.response_session_id,
+        insight_id=body.insight_id,
+        insight_title=body.insight_title,
+        insight_text=body.insight_text,
+        feedback_level=body.feedback_level,
+        feedback_text=body.feedback_text,
+        ocean_scores=(
+            body.ocean_scores.model_dump(exclude_none=True)
+            if body.ocean_scores else None
+        ),
+        archetype_key=body.archetype_key,
+        user_type=body.user_type,
+        created_at=server_ts,
+    )
+    db.add(record)
+    db.commit()
+    logger.info(
+        "[insight_feedback] saved — insight=%s level=%s archetype=%s user_type=%s",
+        body.insight_id, body.feedback_level, body.archetype_key, body.user_type,
+    )
+
+
 @router.post(
     "/feedback",
     response_model=InsightFeedbackResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
-async def submit_insight_feedback(body: InsightFeedbackRequest) -> InsightFeedbackResponse:
+async def submit_insight_feedback(
+    body: InsightFeedbackRequest,
+    db: Session = Depends(get_db),
+) -> InsightFeedbackResponse:
+
     server_ts   = datetime.now(timezone.utc)
     feedback_id = f"{body.response_session_id}:{body.insight_id}"
 
-    logger.info("[insight_feedback] session=%s insight=%s level=%s",
-                body.response_session_id, body.insight_id, body.feedback_level)
+    logger.info(
+        "[insight_feedback] session=%s insight=%s level=%s",
+        body.response_session_id, body.insight_id, body.feedback_level,
+    )
 
-    # Uncomment when Supabase is ready:
-    # await supabase.table("insight_feedback").upsert({
-    #     "feedback_id": feedback_id,
-    #     "response_session_id": body.response_session_id,
-    #     "insight_id": body.insight_id,
-    #     "insight_title": body.insight_title,
-    #     "feedback_level": body.feedback_level,
-    #     "feedback_text": body.feedback_text,
-    #     "ocean_scores": body.ocean_scores.model_dump() if body.ocean_scores else None,
-    #     "archetype_key": body.archetype_key,
-    #     "user_type": body.user_type,
-    #     "created_at": server_ts.isoformat(),
-    # }, on_conflict="feedback_id").execute()
+    _save_to_db(db, body, feedback_id, server_ts)
 
     return InsightFeedbackResponse(
         status="accepted",
