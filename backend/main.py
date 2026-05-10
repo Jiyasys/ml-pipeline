@@ -9,6 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from routers import personality
 from routers import careers
+from routers.insights_feedback import router as insights_router
+
 
 
 # ============================================================
@@ -69,6 +71,7 @@ app.include_router(
     prefix=f"{API_PREFIX}/careers",
     tags=["Careers"],
 )
+app.include_router(insights_router, prefix=f"{API_PREFIX}/insights", tags=["Insights"])
 
 
 # ============================================================

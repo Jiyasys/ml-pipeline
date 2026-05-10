@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 
-import Landing from "./pages/Landing";
+import Landing  from "./pages/Landing";
 import UserType from "./pages/UserType";
-import Quiz from "./pages/Quiz";
-import Results from "./pages/Results";
-import Careers from "./pages/Careers";
+import Quiz     from "./pages/Quiz";
+import Results  from "./pages/Results";
+import Careers  from "./pages/Careers";
 
 import "./index.css";
 
@@ -33,10 +33,9 @@ function loadAppState() {
 
 function saveAppState(data) {
   try {
-    localStorage.setItem(
-      APP_STATE_KEY,
-      JSON.stringify(data)
-    );
+    // Never persist screen — app always starts at Landing
+    const { screen: _omit, ...rest } = data;
+    localStorage.setItem(APP_STATE_KEY, JSON.stringify(rest));
   } catch {}
 }
 
@@ -48,13 +47,11 @@ function clearAppState() {
 
 function clearQuizSession() {
   try {
-    localStorage.removeItem(
-      "edwiserr_quiz_session"
-    );
+    localStorage.removeItem("edwiserr_quiz_session");
   } catch {}
 }
 
-// ── Validation helpers ───────────────────────────────────────
+// ── Validation ───────────────────────────────────────────────
 
 function isValidProfile(profile) {
   return (
@@ -68,61 +65,53 @@ function isValidProfile(profile) {
 // ── App ──────────────────────────────────────────────────────
 
 export default function App() {
-  const persisted = useMemo(
-    () => loadAppState(),
-    []
-  );
+  const persisted = useMemo(() => loadAppState(), []);
 
- const [screen, setScreen] =
-  useState("landing");
+  // Screen always starts at LANDING — never restored from storage
+  const [screen, setScreen] = useState(SCREENS.LANDING);
 
   const [userType, setUserType] = useState(
     persisted?.userType || null
   );
 
   const [profile, setProfile] = useState(
-    isValidProfile(persisted?.profile)
-      ? persisted.profile
-      : null
+    isValidProfile(persisted?.profile) ? persisted.profile : null
   );
 
-  // ── Persist app-level state ───────────────────────────────
+  // recommendations stored in both a ref AND state.
+  // The ref is written FIRST (synchronously) so that when setScreen
+  // triggers a re-render, Careers reads recsRef.current — which is
+  // already populated — rather than waiting for the state flush.
+  const recsRef = useRef(
+    Array.isArray(persisted?.recommendations) ? persisted.recommendations : []
+  );
+  const [recommendations, setRecommendationsState] = useState(
+    recsRef.current
+  );
+
+  const setRecommendations = useCallback((recs) => {
+    const safe = Array.isArray(recs) ? recs : [];
+    recsRef.current = safe;       // synchronous — available immediately
+    setRecommendationsState(safe); // triggers re-render for persistence
+  }, []);
+
+  // ── Persist (never screen) ────────────────────────────────
 
   useEffect(() => {
-    saveAppState({
-      screen,
-      userType,
-      profile,
-    });
-  }, [screen, userType, profile]);
+    saveAppState({ userType, profile, recommendations });
+  }, [userType, profile, recommendations]);
 
-  // ── Navigation helpers ────────────────────────────────────
+  // ── Navigation ────────────────────────────────────────────
 
-  const goToLanding = useCallback(() => {
-    setScreen(SCREENS.LANDING);
-  }, []);
+  const goToLanding  = useCallback(() => setScreen(SCREENS.LANDING),  []);
+  const goToUserType = useCallback(() => setScreen(SCREENS.USERTYPE), []);
+  const goToQuiz     = useCallback(() => setScreen(SCREENS.QUIZ),     []);
+  const goToResults  = useCallback(() => setScreen(SCREENS.RESULTS),  []);
+  const goToCareers  = useCallback(() => setScreen(SCREENS.CAREERS),  []);
 
-  const goToUserType = useCallback(() => {
-    setScreen(SCREENS.USERTYPE);
-  }, []);
+  // ── Handlers ─────────────────────────────────────────────
 
-  const goToQuiz = useCallback(() => {
-    setScreen(SCREENS.QUIZ);
-  }, []);
-
-  const goToResults = useCallback(() => {
-    setScreen(SCREENS.RESULTS);
-  }, []);
-
-  const goToCareers = useCallback(() => {
-    setScreen(SCREENS.CAREERS);
-  }, []);
-
-  // ── Handlers ──────────────────────────────────────────────
-
-  const handleBegin = () => {
-    goToUserType();
-  };
+  const handleBegin = () => goToUserType();
 
   const handleUserTypeSelect = (type) => {
     setUserType(type);
@@ -131,53 +120,32 @@ export default function App() {
 
   const handleQuizComplete = (result) => {
     if (!isValidProfile(result)) {
-      console.error(
-        "Invalid profile returned from backend:",
-        result
-      );
+      console.error("Invalid profile returned from backend:", result);
       return;
     }
-
     setProfile(result);
     goToResults();
   };
 
+  // Results calls this once careers are fetched.
+  // Write to ref first, then navigate — Careers will read recsRef.current
+  // on its very first render, so it never sees an empty array.
+  const handleCareersReady = useCallback(
+    (recs) => {
+      setRecommendations(recs); // writes ref synchronously
+      goToCareers();            // triggers re-render — ref is already set
+    },
+    [setRecommendations, goToCareers]
+  );
+
   const handleRetake = () => {
     setProfile(null);
     setUserType(null);
-
+    setRecommendations([]);
     clearQuizSession();
     clearAppState();
-
     goToLanding();
   };
-
-  // ── Recovery guards ───────────────────────────────────────
-
-  useEffect(() => {
-    // Prevent invalid navigation states
-
-    if (
-      screen === SCREENS.QUIZ &&
-      !userType
-    ) {
-      goToUserType();
-    }
-
-    if (
-      (screen === SCREENS.RESULTS ||
-        screen === SCREENS.CAREERS) &&
-      !isValidProfile(profile)
-    ) {
-      goToLanding();
-    }
-  }, [
-    screen,
-    userType,
-    profile,
-    goToLanding,
-    goToUserType,
-  ]);
 
   // ── Render ────────────────────────────────────────────────
 
@@ -188,35 +156,30 @@ export default function App() {
       )}
 
       {screen === SCREENS.USERTYPE && (
-        <UserType
-          onSelect={handleUserTypeSelect}
-        />
+        <UserType onSelect={handleUserTypeSelect} />
       )}
 
       {screen === SCREENS.QUIZ && userType && (
-        <Quiz
+        <Quiz userType={userType} onComplete={handleQuizComplete} />
+      )}
+
+      {screen === SCREENS.RESULTS && isValidProfile(profile) && (
+        <Results
+          profile={profile}
           userType={userType}
-          onComplete={handleQuizComplete}
+          onCareersReady={handleCareersReady}
+          onRetake={handleRetake}
         />
       )}
 
-      {screen === SCREENS.RESULTS &&
-        isValidProfile(profile) && (
-          <Results
-            profile={profile}
-            userType={userType}
-            onViewCareers={goToCareers}
-            onRetake={handleRetake}
-          />
-        )}
-
-      {screen === SCREENS.CAREERS &&
-        isValidProfile(profile) && (
-          <Careers
-            profile={profile}
-            onBack={goToResults}
-          />
-        )}
+      {screen === SCREENS.CAREERS && isValidProfile(profile) && (
+        <Careers
+          // Pass recsRef.current directly — this is the synchronously
+          // written value, guaranteed to be populated when Careers mounts
+          recommendations={recsRef.current}
+          onBack={goToResults}
+        />
+      )}
     </div>
   );
 }
