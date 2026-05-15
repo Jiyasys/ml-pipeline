@@ -1,15 +1,13 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import axios from "axios";
 
-const BASE = import.meta.env.VITE_API_URL;
-const API  = `${BASE}/personality`;
+const BASE     = import.meta.env.VITE_API_URL;
+const API      = `${BASE}/personality`;
+const SESSIONS = `${BASE}/sessions`;
 
 const QUIZ_MODE = "fast";
-const QUIZ_SEED = 42; // must match backend validator — do NOT change
-
 const LOW_CONFIDENCE_THRESHOLD = 0.65;
 
-// Fisher-Yates shuffle — returns a new array, never mutates input
 function shuffle(arr) {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {
@@ -17,6 +15,10 @@ function shuffle(arr) {
     [a[i], a[j]] = [a[j], a[i]];
   }
   return a;
+}
+
+function randomSeed() {
+  return Math.floor(Math.random() * 1_000_000);
 }
 
 export default function Quiz({ userType, onComplete }) {
@@ -30,6 +32,8 @@ export default function Quiz({ userType, onComplete }) {
   const [error,             setError]             = useState("");
   const [clarificationMode, setClarificationMode] = useState(false);
 
+  const sessionIdRef     = useRef(null);
+  const sessionSeedRef   = useRef(randomSeed());
   const questionStartRef = useRef(Date.now());
   const hiddenAtRef      = useRef(null);
   const loadedRef        = useRef(false);
@@ -41,14 +45,11 @@ export default function Quiz({ userType, onComplete }) {
     return ((current + 1) / questions.length) * 100;
   }, [current, questions.length]);
 
-  // Restore previously selected answer when navigating back,
-  // or clear it when moving forward to an unanswered question.
   useEffect(() => {
     setSelected(answers[questions[current]?.id] ?? null);
   }, [current]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Visibility tracking ───────────────────────────────────
-
+  // ── Visibility tracking ───────────────────────────────────────────────────
   useEffect(() => {
     const handleVisibility = () => {
       if (document.hidden) {
@@ -62,46 +63,77 @@ export default function Quiz({ userType, onComplete }) {
     return () => document.removeEventListener("visibilitychange", handleVisibility);
   }, []);
 
-  // ── Load + shuffle ────────────────────────────────────────
-  // Fetch with seed=42 (required by backend validator) then
-  // shuffle client-side so the order is different every session.
+  // ── Create DB session — fire and forget, never blocks the quiz ────────────
+  const createSession = useCallback(() => {
+    axios.post(SESSIONS, { student_identifier: `anon-${Date.now()}` })
+      .then(res => {
+        sessionIdRef.current = res.data.id;
+        console.log("[Quiz] session created:", sessionIdRef.current);
+      })
+      .catch(err => {
+        console.warn("[Quiz] session create failed (non-fatal):", err?.response?.data || err);
+      });
+    // No await — returns immediately, quiz loads without waiting
+  }, []);
 
+  // ── Save answers to DB — fire and forget ─────────────────────────────────
+  const saveAnswersToDB = useCallback((answersMap) => {
+    if (!sessionIdRef.current) return;
+    const answers = Object.entries(answersMap).map(([question_set_id, selected_answer]) => ({
+      question_set_id,
+      selected_answer,
+    }));
+    axios.post(`${SESSIONS}/${sessionIdRef.current}/answers`, { answers })
+      .then(() => console.log("[Quiz] saved", answers.length, "answers"))
+      .catch(err => console.warn("[Quiz] save answers failed:", err?.response?.data || err));
+  }, []);
+
+  // ── Mark session submitted — fire and forget ──────────────────────────────
+  const markSubmitted = useCallback(() => {
+    if (!sessionIdRef.current) return;
+    axios.post(`${SESSIONS}/${sessionIdRef.current}/submit`)
+      .then(() => console.log("[Quiz] session submitted"))
+      .catch(err => console.warn("[Quiz] mark submitted failed:", err?.response?.data || err));
+  }, []);
+
+  // ── Load questions — fast, not blocked by DB ──────────────────────────────
   const loadQuestions = useCallback(async () => {
     try {
       setLoading(true);
       setError("");
+      sessionSeedRef.current = randomSeed();
 
+      // Questions load immediately — session creates in background
       const res = await axios.post(`${API}/questions`, {
         user_type: userType,
         inst_id:   "frontend-web",
         mode:      QUIZ_MODE,
-        seed:      QUIZ_SEED,
+        seed:      sessionSeedRef.current,
       });
 
       const raw = res.data.questions || [];
-
       if (raw.length === 0) {
         setError("No questions returned from server.");
         return;
       }
 
-      // Shuffle so users get a different order every session.
-      // The question IDs are unchanged — backend validation still passes.
-      const shuffled = shuffle(raw);
-
-      setQuestions(shuffled);
+      setQuestions(shuffle(raw));
       setCurrent(0);
       setAnswers({});
       setResponseTimes({});
       setSelected(null);
       questionStartRef.current = Date.now();
+
+      // Create session in background after questions are showing
+      createSession();
+
     } catch (err) {
-      console.error("[Quiz] loadQuestions error:", err?.response?.data || err);
+      console.error("[Quiz] load error:", err?.response?.data || err);
       setError("Could not load questions. Please try again.");
     } finally {
       setLoading(false);
     }
-  }, [userType]);
+  }, [userType, createSession]);
 
   useEffect(() => {
     if (loadedRef.current) return;
@@ -109,16 +141,15 @@ export default function Quiz({ userType, onComplete }) {
     loadQuestions();
   }, [loadQuestions]);
 
-  // ── Submit ────────────────────────────────────────────────
-
-  const submitAssessment = useCallback(async (
-    finalAnswers,
-    finalTimes,
-    isClarification = false
-  ) => {
+  // ── Submit ────────────────────────────────────────────────────────────────
+  const submitAssessment = useCallback(async (finalAnswers, finalTimes, isClarification = false) => {
     try {
       setSubmitting(true);
       setError("");
+
+      // Save to DB in background, score immediately
+      saveAnswersToDB(finalAnswers);
+      markSubmitted();
 
       const profileRes = await axios.post(`${API}/submit`, {
         user_type:         userType,
@@ -130,6 +161,8 @@ export default function Quiz({ userType, onComplete }) {
 
       const profile           = profileRes.data;
       const overallConfidence = profile?.confidence?.overall ?? 1;
+
+      profile.response_session_id = sessionIdRef.current ?? null;
 
       if (!isClarification && overallConfidence < LOW_CONFIDENCE_THRESHOLD) {
         try {
@@ -147,10 +180,9 @@ export default function Quiz({ userType, onComplete }) {
           });
 
           const clarifyQs = clarifyRes.data?.clarification_questions || [];
-
           if (clarifyQs.length > 0) {
             setClarificationMode(true);
-            setQuestions(clarifyQs); // clarification Qs are not shuffled — use as-is
+            setQuestions(clarifyQs);
             setCurrent(0);
             setSelected(null);
             questionStartRef.current = Date.now();
@@ -168,15 +200,14 @@ export default function Quiz({ userType, onComplete }) {
       setError(
         typeof detail === "string"
           ? `Submission failed: ${detail}`
-          : "Could not submit assessment. Please retry."
+          : "Could not submit. Please retry."
       );
     } finally {
       setSubmitting(false);
     }
-  }, [userType, onComplete]);
+  }, [userType, onComplete, saveAnswersToDB, markSubmitted]);
 
-  // ── Answer ────────────────────────────────────────────────
-
+  // ── Answer ────────────────────────────────────────────────────────────────
   const handleAnswer = useCallback(async () => {
     if (!selected || !currentQuestion || submitting) return;
 
@@ -201,37 +232,21 @@ export default function Quiz({ userType, onComplete }) {
     current, questions.length, clarificationMode, submitAssessment,
   ]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Back ──────────────────────────────────────────────────
-
   const handleBack = useCallback(() => {
     if (current === 0 || submitting) return;
     setCurrent((prev) => prev - 1);
     questionStartRef.current = Date.now();
   }, [current, submitting]);
 
-  // ── Retry ─────────────────────────────────────────────────
-
   const handleRetry = useCallback(() => {
     loadedRef.current = false;
+    sessionIdRef.current = null;
     loadQuestions();
   }, [loadQuestions]);
 
-  // ── Render states ─────────────────────────────────────────
-
   if (loading) return <div className="quiz-loading">Loading questions…</div>;
-
-  if (error) {
-    return (
-      <div className="quiz-error">
-        <p>{error}</p>
-        <button onClick={handleRetry}>Retry</button>
-      </div>
-    );
-  }
-
+  if (error)   return <div className="quiz-error"><p>{error}</p><button onClick={handleRetry}>Retry</button></div>;
   if (!currentQuestion) return <div className="quiz-error">No questions available.</div>;
-
-  // ── Render ────────────────────────────────────────────────
 
   return (
     <div className="quiz">
@@ -239,13 +254,9 @@ export default function Quiz({ userType, onComplete }) {
         <div className="quiz-progress-wrap">
           <div className="quiz-progress" style={{ width: `${progress}%` }} />
         </div>
-        <div className="quiz-counter">
-          Question {current + 1} / {questions.length}
-        </div>
+        <div className="quiz-counter">Question {current + 1} / {questions.length}</div>
         {clarificationMode && (
-          <div className="clarify-banner">
-            A few extra questions to sharpen your results.
-          </div>
+          <div className="clarify-banner">A few extra questions to sharpen your results.</div>
         )}
       </div>
 
@@ -268,15 +279,9 @@ export default function Quiz({ userType, onComplete }) {
         </div>
 
         <div className="quiz-actions">
-          <button onClick={handleBack} disabled={current === 0 || submitting}>
-            Back
-          </button>
+          <button onClick={handleBack} disabled={current === 0 || submitting}>Back</button>
           <button onClick={handleAnswer} disabled={!selected || submitting}>
-            {submitting
-              ? "Submitting…"
-              : current === questions.length - 1
-              ? "Finish"
-              : "Next"}
+            {submitting ? "Submitting…" : current === questions.length - 1 ? "Finish" : "Next"}
           </button>
         </div>
       </div>

@@ -1,244 +1,149 @@
-"""
-schemas.py
-----------
-Pydantic v2 schemas for EDWISERR.
-
-Convention:
-    <Model>Base     — shared field definitions
-    <Model>Create   — used in POST request bodies (input)
-    <Model>Update   — used in PATCH request bodies (partial update)
-    <Model>Read     — returned in API responses (output)
-"""
-
+# schemas/schemas.py
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, Field, field_validator
 
-
-# ─── Shared config ─────────────────────────────────────────────────────────────
-class _OrmBase(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+# ── Shared types ──────────────────────────────────────────────────────────────
+FeedbackLevel = Literal["strongly_resonates", "somewhat_resonates", "doesnt_feel_accurate"]
+UserType      = Literal["class_10", "class_12", "undergraduate", "postgraduate",
+                         "professional", "career_changer", "unknown"]
+OceanTrait    = Literal["Openness", "Conscientiousness", "Extraversion",
+                         "Agreeableness", "Neuroticism"]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# School
+# Schools
 # ══════════════════════════════════════════════════════════════════════════════
-class SchoolBase(BaseModel):
-    school_name: str = Field(..., min_length=1, max_length=255)
-    test_link: str | None = Field(None, max_length=512)
-    city: str | None = Field(None, max_length=100)
-    state: str | None = Field(None, max_length=100)
-    contact_person: str | None = Field(None, max_length=150)
-    mobile: str | None = Field(None, max_length=20)
+class SchoolCreate(BaseModel):
+    school_name:    str            = Field(..., min_length=1, max_length=255)
+    test_link:      Optional[str]  = None
+    city:           Optional[str]  = None
+    state:          Optional[str]  = None
+    contact_person: Optional[str]  = None
+    mobile:         Optional[str]  = None
 
 
-class SchoolCreate(SchoolBase):
-    pass
-
-
-class SchoolRead(_OrmBase, SchoolBase):
-    id: int
+class SchoolRead(SchoolCreate):
+    id:         int
     created_at: datetime
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Test
+# Tests
 # ══════════════════════════════════════════════════════════════════════════════
-class TestBase(BaseModel):
-    school_id: int
-    title: str = Field(..., min_length=1, max_length=255)
-    test_code: str = Field(..., min_length=1, max_length=64)
-    is_active: bool = True
+class TestCreate(BaseModel):
+    school_id:  int
+    title:      str  = Field(..., min_length=1, max_length=255)
+    test_code:  str  = Field(..., min_length=1, max_length=64)
+    is_active:  bool = True
 
 
-class TestCreate(TestBase):
-    pass
-
-
-class TestRead(_OrmBase, TestBase):
-    id: int
+class TestRead(TestCreate):
+    id:         int
     created_at: datetime
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# QuestionSet
+# Question Sets
 # ══════════════════════════════════════════════════════════════════════════════
-OCEAN_TRAITS = {"Openness", "Conscientiousness", "Extraversion", "Agreeableness", "Neuroticism"}
+class QuestionSetCreate(BaseModel):
+    question:      str            = Field(..., min_length=1)
+    answer1:       str            = Field(..., min_length=1)
+    answer2:       str            = Field(..., min_length=1)
+    answer3:       str            = Field(..., min_length=1)
+    answer4:       str            = Field(..., min_length=1)
+    trait:         OceanTrait
+    sub_dimension: Optional[str]  = None
+    is_active:     bool           = True
 
 
-class QuestionSetBase(BaseModel):
-    question: str = Field(..., min_length=1)
-    answer1: str = Field(..., min_length=1)
-    answer2: str = Field(..., min_length=1)
-    answer3: str = Field(..., min_length=1)
-    answer4: str = Field(..., min_length=1)
-    trait: str = Field(..., max_length=50)
-    sub_dimension: str | None = Field(None, max_length=100)
-    is_active: bool = True
-
-    @field_validator("trait")
-    @classmethod
-    def trait_must_be_ocean(cls, v: str) -> str:
-        if v not in OCEAN_TRAITS:
-            raise ValueError(
-                f"trait must be one of {sorted(OCEAN_TRAITS)}, got {v!r}"
-            )
-        return v
-
-
-class QuestionSetCreate(QuestionSetBase):
-    pass
-
-
-class QuestionSetRead(_OrmBase, QuestionSetBase):
-    id: int
+class QuestionSetRead(QuestionSetCreate):
+    id:         int
     created_at: datetime
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ResponseSession
+# Response Sessions
 # ══════════════════════════════════════════════════════════════════════════════
-class ResponseSessionBase(BaseModel):
-    school_id: int | None = None
-    test_id: int | None = None
-    student_identifier: str = Field(..., min_length=1, max_length=255)
+class ResponseSessionCreate(BaseModel):
+    school_id:          Optional[int] = None
+    test_id:            Optional[int] = None
+    student_identifier: str           = Field(..., min_length=1, max_length=255)
 
 
-class ResponseSessionCreate(ResponseSessionBase):
-    pass
-
-
-class ResponseSessionRead(_OrmBase, ResponseSessionBase):
-    id: int
-    started_at: datetime
-    submitted_at: datetime | None
-
-
-class ResponseSessionSubmit(BaseModel):
-    """Marks a session as submitted (sets submitted_at timestamp)."""
-    submitted_at: datetime
+class ResponseSessionRead(ResponseSessionCreate):
+    id:           int
+    started_at:   datetime
+    submitted_at: Optional[datetime] = None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Response  (one row per answered question)
+# Responses  (one row per answer)
 # ══════════════════════════════════════════════════════════════════════════════
-class ResponseBase(BaseModel):
-    response_session_id: int
+class ResponseCreate(BaseModel):
     question_set_id: int
     selected_answer: str = Field(..., min_length=1, max_length=512)
 
 
-class ResponseCreate(ResponseBase):
-    pass
-
-
-class ResponseRead(_OrmBase, ResponseBase):
-    id: int
-    created_at: datetime
-
-
-# Batch submission — list of answers for an entire session
 class ResponseBatchCreate(BaseModel):
-    response_session_id: int
-    answers: list[dict[str, Any]] = Field(
-        ...,
-        description="List of {question_set_id, selected_answer} objects",
-        min_length=1,
-    )
+    answers: list[ResponseCreate] = Field(..., min_length=1)
 
-    @field_validator("answers")
-    @classmethod
-    def validate_answers(cls, v: list[dict]) -> list[dict]:
-        for item in v:
-            if "question_set_id" not in item or "selected_answer" not in item:
-                raise ValueError(
-                    "Each answer must contain 'question_set_id' and 'selected_answer'"
-                )
-            if not str(item["selected_answer"]).strip():
-                raise ValueError("selected_answer cannot be blank")
-        return v
+
+class ResponseRead(ResponseCreate):
+    id:                  int
+    response_session_id: int
+    created_at:          datetime
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# InsightFeedback
+# Insight Feedback
 # ══════════════════════════════════════════════════════════════════════════════
-FEEDBACK_LEVELS = {
-    "strongly_resonates",
-    "resonates",
-    "neutral",
-    "does_not_resonate",
-}
+class OceanScores(BaseModel):
+    Openness:          Optional[float] = Field(None, ge=0, le=100)
+    Conscientiousness: Optional[float] = Field(None, ge=0, le=100)
+    Extraversion:      Optional[float] = Field(None, ge=0, le=100)
+    Agreeableness:     Optional[float] = Field(None, ge=0, le=100)
+    Neuroticism:       Optional[float] = Field(None, ge=0, le=100)
 
 
-class InsightFeedbackCreate(BaseModel):
-    response_session_id: int = Field(..., gt=0)
-    insight_id: str = Field(..., min_length=1, max_length=100)
-    insight_title: str = Field(..., min_length=1, max_length=255)
-    insight_text: str = Field(..., min_length=1)
-    feedback_level: str = Field(..., max_length=50)
-    feedback_text: str | None = Field(None, max_length=2000)
-    ocean_scores: dict[str, float | int] | None = None
+class InsightFeedbackRequest(BaseModel):
+    response_session_id: Optional[int]         = None
+    insight_id:          str                   = Field(..., min_length=1, max_length=80)
+    insight_title:       str                   = Field(..., min_length=1, max_length=200)
+    insight_text:        str                   = Field(..., min_length=1, max_length=4000)
+    feedback_level:      FeedbackLevel
+    feedback_text:       Optional[str]         = Field(None, max_length=500)
+    ocean_scores:        Optional[OceanScores] = None
+    archetype_key:       Optional[str]         = Field(None, max_length=80)
+    user_type:           Optional[UserType]    = None
+    submitted_at:        Optional[datetime]    = None
 
-    @field_validator("feedback_level")
+    @field_validator("insight_id")
     @classmethod
-    def feedback_level_must_be_valid(cls, v: str) -> str:
-        if v not in FEEDBACK_LEVELS:
-            raise ValueError(
-                f"feedback_level must be one of {sorted(FEEDBACK_LEVELS)}, got {v!r}"
-            )
-        return v
+    def slugify_id(cls, v: str) -> str:
+        import re
+        return re.sub(r"[^a-z0-9-]", "", v.lower().replace(" ", "-"))
 
-    @field_validator("ocean_scores")
+    @field_validator("feedback_text")
     @classmethod
-    def validate_ocean_scores(
-        cls, v: dict[str, float | int] | None
-    ) -> dict[str, float | int] | None:
-        if v is None:
-            return v
-        allowed_keys = {
-            "Openness",
-            "Conscientiousness",
-            "Extraversion",
-            "Agreeableness",
-            "Neuroticism",
-        }
-        unknown = set(v.keys()) - allowed_keys
-        if unknown:
-            raise ValueError(
-                f"Unknown OCEAN keys: {unknown}. Allowed: {allowed_keys}"
-            )
-        for key, score in v.items():
-            if not (0 <= float(score) <= 100):
-                raise ValueError(f"Score for {key!r} must be between 0 and 100")
-        return v
+    def strip_text(cls, v: Optional[str]) -> Optional[str]:
+        return v.strip() if v else None
 
 
-class InsightFeedbackRead(_OrmBase):
-    id: int
-    response_session_id: int
-    insight_id: str
-    insight_title: str
-    insight_text: str
-    feedback_level: str
-    feedback_text: str | None
-    ocean_scores: dict[str, float | int] | None
-    created_at: datetime
+class AnalyticsSignals(BaseModel):
+    resonance_category:   Literal["positive", "neutral", "negative"]
+    has_annotation:       bool
+    ocean_dominant_trait: Optional[str]
+    archetype_key:        Optional[str]
 
 
-# ─── Generic API response envelopes ───────────────────────────────────────────
-class SuccessResponse(BaseModel):
-    success: bool = True
-    message: str
-
-
-class ErrorDetail(BaseModel):
-    field: str | None = None
-    message: str
-
-
-class ErrorResponse(BaseModel):
-    success: bool = False
-    errors: list[ErrorDetail]
+class InsightFeedbackResponse(BaseModel):
+    status:           Literal["accepted"]
+    feedback_id:      str
+    insight_id:       str
+    feedback_level:   FeedbackLevel
+    server_timestamp: datetime
+    analytics:        AnalyticsSignals

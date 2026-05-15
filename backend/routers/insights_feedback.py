@@ -1,72 +1,25 @@
-# insights_feedback.py
+# routers/insights_feedback.py
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field, field_validator
-from sqlalchemy.orm import Session
-
-from db.deps import get_db
-from models.models import InsightFeedback, ResponseSession
+from fastapi import APIRouter, HTTPException, status
+from db.client import get_supabase
+from schemas.schemas import (
+    AnalyticsSignals,
+    FeedbackLevel,
+    InsightFeedbackRequest,
+    InsightFeedbackResponse,
+    OceanScores,
+)
 
 logger = logging.getLogger("edwiserr.insights")
-router = APIRouter(tags=["insights"])
-
-FeedbackLevel = Literal["strongly_resonates", "somewhat_resonates", "doesnt_feel_accurate"]
-UserType = Literal["class_10", "class_12", "undergraduate", "postgraduate", "professional", "career_changer", "unknown"]
+router = APIRouter(tags=["Insights"])
 
 
-class OceanScores(BaseModel):
-    Openness:          Optional[float] = Field(None, ge=0, le=100)
-    Conscientiousness: Optional[float] = Field(None, ge=0, le=100)
-    Extraversion:      Optional[float] = Field(None, ge=0, le=100)
-    Agreeableness:     Optional[float] = Field(None, ge=0, le=100)
-    Neuroticism:       Optional[float] = Field(None, ge=0, le=100)
-
-
-class InsightFeedbackRequest(BaseModel):
-    response_session_id: Optional[int]         = None
-    insight_id:          str                   = Field(..., min_length=1, max_length=80)
-    insight_title:       str                   = Field(..., min_length=1, max_length=200)
-    insight_text:        str                   = Field(..., min_length=1, max_length=4000)
-    feedback_level:      FeedbackLevel
-    feedback_text:       Optional[str]         = Field(None, max_length=500)
-    ocean_scores:        Optional[OceanScores] = None
-    archetype_key:       Optional[str]         = Field(None, max_length=80)
-    user_type:           Optional[UserType]    = None
-    submitted_at:        Optional[datetime]    = None
-
-    @field_validator("insight_id")
-    @classmethod
-    def slugify_id(cls, v: str) -> str:
-        import re
-        return re.sub(r"[^a-z0-9-]", "", v.lower().replace(" ", "-"))
-
-    @field_validator("feedback_text")
-    @classmethod
-    def strip_text(cls, v: Optional[str]) -> Optional[str]:
-        return v.strip() if v else None
-
-
-class AnalyticsSignals(BaseModel):
-    resonance_category:   Literal["positive", "neutral", "negative"]
-    has_annotation:       bool
-    ocean_dominant_trait: Optional[str]
-    archetype_key:        Optional[str]
-
-
-class InsightFeedbackResponse(BaseModel):
-    status:           Literal["accepted"]
-    feedback_id:      str
-    insight_id:       str
-    feedback_level:   FeedbackLevel
-    server_timestamp: datetime
-    analytics:        AnalyticsSignals
-
-
+# ── Helpers (your original logic — untouched) ─────────────────────────────────
 def _resonance_category(level: FeedbackLevel) -> Literal["positive", "neutral", "negative"]:
     if level == "strongly_resonates": return "positive"
     if level == "somewhat_resonates": return "neutral"
@@ -80,62 +33,64 @@ def _dominant_trait(scores: Optional[OceanScores]) -> Optional[str]:
     return max(values, key=lambda k: values[k]) if values else None
 
 
-def _save_to_db(
-    db: Session,
-    body: InsightFeedbackRequest,
-    feedback_id: str,
-    server_ts: datetime,
-) -> None:
+# ── POST /insights/feedback ───────────────────────────────────────────────────
+@router.post(
+    "/insights/feedback",
+    response_model=InsightFeedbackResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def submit_insight_feedback(body: InsightFeedbackRequest) -> InsightFeedbackResponse:
+    sb        = get_supabase()
+    server_ts = datetime.now(timezone.utc)
+
+    # Verify session exists if one was provided
     if body.response_session_id is not None:
-        session_exists = db.get(ResponseSession, body.response_session_id)
-        if session_exists is None:
+        check = (
+            sb.table("response_sessions")
+            .select("id")
+            .eq("id", body.response_session_id)
+            .maybe_single()
+            .execute()
+        )
+        if not check.data:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"ResponseSession id={body.response_session_id} not found.",
             )
 
-    record = InsightFeedback(
-        response_session_id=body.response_session_id,
-        insight_id=body.insight_id,
-        insight_title=body.insight_title,
-        insight_text=body.insight_text,
-        feedback_level=body.feedback_level,
-        feedback_text=body.feedback_text,
-        ocean_scores=(
+    # Build the row to insert
+    row = {
+        "response_session_id": body.response_session_id,
+        "insight_id":          body.insight_id,
+        "insight_title":       body.insight_title,
+        "insight_text":        body.insight_text,
+        "feedback_level":      body.feedback_level,
+        "feedback_text":       body.feedback_text,
+        "ocean_scores":        (
             body.ocean_scores.model_dump(exclude_none=True)
             if body.ocean_scores else None
         ),
-        archetype_key=body.archetype_key,
-        user_type=body.user_type,
-        created_at=server_ts,
-    )
-    db.add(record)
-    db.commit()
-    logger.info(
-        "[insight_feedback] saved — insight=%s level=%s archetype=%s user_type=%s",
-        body.insight_id, body.feedback_level, body.archetype_key, body.user_type,
-    )
+        "archetype_key":       body.archetype_key,
+        "user_type":           body.user_type,
+        "created_at":          server_ts.isoformat(),
+    }
 
+    # Remove None values so Supabase uses column defaults
+    row = {k: v for k, v in row.items() if v is not None}
 
-@router.post(
-    "/feedback",
-    response_model=InsightFeedbackResponse,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-async def submit_insight_feedback(
-    body: InsightFeedbackRequest,
-    db: Session = Depends(get_db),
-) -> InsightFeedbackResponse:
+    res = sb.table("insight_feedback").insert(row).execute()
 
-    server_ts   = datetime.now(timezone.utc)
+    if not res.data:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save feedback.",
+        )
+
     feedback_id = f"{body.response_session_id}:{body.insight_id}"
-
     logger.info(
-        "[insight_feedback] session=%s insight=%s level=%s",
-        body.response_session_id, body.insight_id, body.feedback_level,
+        "[insight_feedback] saved — id=%s insight=%s level=%s",
+        res.data[0].get("id"), body.insight_id, body.feedback_level,
     )
-
-    _save_to_db(db, body, feedback_id, server_ts)
 
     return InsightFeedbackResponse(
         status="accepted",
@@ -150,3 +105,31 @@ async def submit_insight_feedback(
             archetype_key=body.archetype_key,
         ),
     )
+
+
+# ── GET /insights/feedback/session/{session_id} ───────────────────────────────
+@router.get("/insights/feedback/session/{session_id}")
+def list_session_feedback(session_id: int) -> list[dict]:
+    sb  = get_supabase()
+    res = (
+        sb.table("insight_feedback")
+        .select("*")
+        .eq("response_session_id", session_id)
+        .execute()
+    )
+    return res.data
+
+
+# ── GET /insights/feedback/insight/{insight_id} (analytics) ──────────────────
+@router.get("/insights/feedback/insight/{insight_id}")
+def list_insight_analytics(insight_id: str, limit: int = 500) -> list[dict]:
+    sb  = get_supabase()
+    res = (
+        sb.table("insight_feedback")
+        .select("*")
+        .eq("insight_id", insight_id)
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return res.data
