@@ -1,68 +1,88 @@
-"""
-routers/questions.py
---------------------
-OCEAN question bank management endpoints.
-"""
-
+# routers/sessions.py
 from __future__ import annotations
 
-from typing import Sequence
+import logging
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
-
-from crud.crud import create_question, get_question, list_questions
-from db.deps import get_db
-from models.models import QuestionSet
-from schemas.schemas import QuestionSetCreate, QuestionSetRead
-
-router = APIRouter(
-    prefix="/api/v1/questions",
-    tags=["Question Bank"],
+from fastapi import APIRouter, HTTPException, status
+from db.client import get_supabase
+from schemas.schemas import (
+    ResponseBatchCreate,
+    ResponseRead,
+    ResponseSessionCreate,
+    ResponseSessionRead,
 )
 
-
-@router.post(
-    "",
-    response_model=QuestionSetRead,
-    status_code=status.HTTP_201_CREATED,
-    summary="Add a question to the OCEAN bank",
-)
-def add_question(
-    payload: QuestionSetCreate,
-    db: Session = Depends(get_db),
-) -> QuestionSet:
-    return create_question(db, payload)
+logger = logging.getLogger("edwiserr.sessions")
+router = APIRouter(tags=["Response Sessions"])
 
 
-@router.get(
-    "",
-    response_model=list[QuestionSetRead],
-    summary="List OCEAN questions (optionally filter by trait)",
-)
-def get_questions(
-    trait: str | None = None,
-    active_only: bool = True,
-    skip: int = 0,
-    limit: int = 200,
-    db: Session = Depends(get_db),
-) -> Sequence[QuestionSet]:
-    return list_questions(db, trait=trait, active_only=active_only, skip=skip, limit=limit)
+# ── Start a session ───────────────────────────────────────────────────────────
+@router.post("/sessions", response_model=ResponseSessionRead, status_code=status.HTTP_201_CREATED)
+def start_session(payload: ResponseSessionCreate) -> ResponseSessionRead:
+    sb  = get_supabase()
+    res = sb.table("response_sessions").insert(payload.model_dump(exclude_none=True)).execute()
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="Failed to create session.")
+
+    logger.info("Session started: id=%s", res.data[0].get("id"))
+    return ResponseSessionRead(**res.data[0])
 
 
-@router.get(
-    "/{question_id}",
-    response_model=QuestionSetRead,
-    summary="Get a question by ID",
-)
-def get_question_by_id(
-    question_id: int,
-    db: Session = Depends(get_db),
-) -> QuestionSet:
-    q = get_question(db, question_id)
-    if q is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Question id={question_id} not found.",
-        )
-    return q
+# ── Mark session as submitted ─────────────────────────────────────────────────
+@router.post("/sessions/{session_id}/submit", response_model=ResponseSessionRead)
+def submit_session(session_id: int) -> ResponseSessionRead:
+    sb  = get_supabase()
+
+    # Check session exists
+    check = sb.table("response_sessions").select("id").eq("id", session_id).maybe_single().execute()
+    if not check.data:
+        raise HTTPException(status_code=404, detail=f"Session id={session_id} not found.")
+
+    res = (
+        sb.table("response_sessions")
+        .update({"submitted_at": datetime.now(timezone.utc).isoformat()})
+        .eq("id", session_id)
+        .execute()
+    )
+
+    return ResponseSessionRead(**res.data[0])
+
+
+# ── Batch submit answers (one row per answer) ─────────────────────────────────
+@router.post("/sessions/{session_id}/answers",
+             response_model=list[ResponseRead],
+             status_code=status.HTTP_201_CREATED)
+def submit_answers(session_id: int, payload: ResponseBatchCreate) -> list[ResponseRead]:
+    sb = get_supabase()
+
+    # Check session exists
+    check = sb.table("response_sessions").select("id").eq("id", session_id).maybe_single().execute()
+    if not check.data:
+        raise HTTPException(status_code=404, detail=f"Session id={session_id} not found.")
+
+    rows = [
+        {
+            "response_session_id": session_id,
+            "question_set_id":     answer.question_set_id,
+            "selected_answer":     answer.selected_answer,
+        }
+        for answer in payload.answers
+    ]
+
+    res = sb.table("responses").insert(rows).execute()
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="Failed to save answers.")
+
+    logger.info("Saved %d answers for session %d", len(res.data), session_id)
+    return [ResponseRead(**r) for r in res.data]
+
+
+# ── Get all answers for a session ─────────────────────────────────────────────
+@router.get("/sessions/{session_id}/answers", response_model=list[ResponseRead])
+def get_answers(session_id: int) -> list[ResponseRead]:
+    sb  = get_supabase()
+    res = sb.table("responses").select("*").eq("response_session_id", session_id).execute()
+    return [ResponseRead(**r) for r in res.data]

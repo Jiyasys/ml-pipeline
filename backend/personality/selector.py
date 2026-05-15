@@ -1,12 +1,10 @@
+# personality/selector.py
 # ============================================================
-# selector.py — Big Five (OCEAN) Question Selector
+# Big Five (OCEAN) Question Selector
 #
-# Responsibilities:
-#   - select_questions()              : balanced, deterministic session Q selection
-#   - select_clarification_questions(): lowest-confidence trait clarification Qs
-#
-# This module handles ONLY question selection.
-# No scoring, no personality interpretation, no recommendations.
+# Fix: seed is now random per session (not hardcoded to 42).
+# Each session gets 1 random question per sub-dimension = 25 total.
+# No student ever sees the same set twice.
 # ============================================================
 
 import random
@@ -16,12 +14,10 @@ from personality.questions import QUESTIONS, SUB_DIMENSIONS, TRAITS
 # Constants
 # ---------------------------------------------------------------------------
 
-DEFAULT_SEED = 42
-
 QUESTIONS_PER_SUBDIM = {
-    "full":     15,
-    "standard": 3,
-    "fast":     1,
+    "full":     5,   # all 5 questions per sub-dimension
+    "standard": 2,   # 2 per sub-dimension = 50 total
+    "fast":     1,   # 1 per sub-dimension = 25 total  ← your quiz mode
 }
 
 SHORT_TO_FULL = {
@@ -32,7 +28,6 @@ SHORT_TO_FULL = {
     "N": "Neuroticism",
 }
 
-# Inverse map for normalisation (full names are identity-mapped)
 _FULL_NAMES = set(SHORT_TO_FULL.values())
 
 
@@ -41,43 +36,29 @@ _FULL_NAMES = set(SHORT_TO_FULL.values())
 # ---------------------------------------------------------------------------
 
 def _normalize_trait(name: str) -> str:
-    """Return the canonical full trait name, or the input unchanged if unknown."""
     if name in _FULL_NAMES:
         return name
     return SHORT_TO_FULL.get(name, name)
 
 
 def build_lookup() -> tuple[dict, dict]:
-    """
-    Build and return two lookup structures:
-
-    q_by_id  : { question_id -> question_dict }
-                O(1) access by ID; invalid IDs are simply absent.
-
-    trait_subdim_pools : { (full_trait, subdim) -> [question_id, ...] }
-                         Derived from SUB_DIMENSIONS; keys use full trait names.
-                         Sub-dimension lists are sorted for stability.
-    """
     q_by_id: dict = {q["id"]: q for q in QUESTIONS}
 
     trait_subdim_pools: dict = {}
     for key, qids in SUB_DIMENSIONS.items():
         if not isinstance(key, str) or "/" not in key:
-            continue                         # skip malformed keys silently
+            continue
         trait_raw, subdim = key.split("/", 1)
         trait = _normalize_trait(trait_raw)
         canonical_key = (trait, subdim)
-        # Keep only IDs that exist in q_by_id; sort for deterministic base order
         valid_ids = sorted(qid for qid in qids if qid in q_by_id)
         trait_subdim_pools[canonical_key] = valid_ids
 
     return q_by_id, trait_subdim_pools
 
 
-# Build once at import time
 _Q_BY_ID, _TRAIT_SUBDIM_POOLS = build_lookup()
 
-# Pre-compute sorted sub-dimension lists per trait (lexicographic, stable)
 _TRAIT_SUBDIMS_SORTED: dict = {}
 for (_trait, _subdim) in _TRAIT_SUBDIM_POOLS:
     _TRAIT_SUBDIMS_SORTED.setdefault(_trait, []).append(_subdim)
@@ -91,69 +72,65 @@ for _trait in _TRAIT_SUBDIMS_SORTED:
 
 def select_questions(
     user_type: str,
-    mode: str = "standard",
-    seed: int = None,
+    mode: str = "fast",
+    seed: int | None = None,          # None = truly random per session
 ) -> list:
     """
-    Select a balanced, deterministic subset of questions for one assessment session.
+    Select a balanced set of questions for one quiz session.
 
-    Parameters
-    ----------
-    user_type : str
-        Caller-supplied user type.  NOT used to bias selection in any way.
-    mode : str
-        "fast" | "standard" | "full".  Invalid values fall back to "standard".
-    seed : int | None
-        RNG seed.  None → DEFAULT_SEED (42).
+    mode="fast"  → 1 question per sub-dimension = 25 questions total
+    mode="standard" → 2 per sub-dimension = 50 total
+    mode="full"  → 5 per sub-dimension = 125 total
 
-    Returns
-    -------
-    list of question dicts, ordered by:
-        TRAITS order → sub-dimension (lexicographic) → question order within subdim
+    seed=None (default) → different questions every session  ✅
+    seed=int            → reproducible set (for testing only)
     """
-    # ── Resolve seed ──────────────────────────────────────────────────────────
-    effective_seed = seed if seed is not None else DEFAULT_SEED
-
-    # ── Resolve mode ─────────────────────────────────────────────────────────
+    # ── Resolve mode ─────────────────────────────────────────
     if mode not in QUESTIONS_PER_SUBDIM:
         import warnings
         warnings.warn(
-            f"select_questions(): unknown mode {mode!r} — falling back to 'standard'.",
+            f"select_questions(): unknown mode {mode!r} — falling back to 'fast'.",
             stacklevel=2,
         )
-    n_per_subdim = QUESTIONS_PER_SUBDIM.get(mode, QUESTIONS_PER_SUBDIM["standard"])
+    n_per_subdim = QUESTIONS_PER_SUBDIM.get(mode, QUESTIONS_PER_SUBDIM["fast"])
 
-    # ── Tracking structures ───────────────────────────────────────────────────
+    # ── Resolve seed ──────────────────────────────────────────
+    # None → random; a provided int is used as-is (testing / replay)
+    effective_seed = seed  # random.Random(None) uses OS entropy
+
+    # ── Selection ─────────────────────────────────────────────
     seen_ids: set = set()
-    counts: dict = {}       # (trait, subdim) -> int  — O(1) increment
     selected: list = []
 
-    # ── Iterate in stable order ───────────────────────────────────────────────
     for trait in TRAITS:
         full_trait = _normalize_trait(trait)
-        subdims = _TRAIT_SUBDIMS_SORTED.get(full_trait, [])  # already sorted
+        subdims = _TRAIT_SUBDIMS_SORTED.get(full_trait, [])
 
         for subdim in subdims:
-            counts[(full_trait, subdim)] = 0
-
             pool_ids = _TRAIT_SUBDIM_POOLS.get((full_trait, subdim), [])
             if not pool_ids:
                 continue
 
-            # Per-(trait, subdim) local RNG — never touches global state
-            rng = random.Random(f"{effective_seed}:{full_trait}:{subdim}")
-            shuffled = pool_ids[:]          # copy; don't mutate the lookup
+            # Each (trait, subdim) gets its own RNG instance.
+            # seed=None → random.Random() uses OS entropy → unique every call
+            rng = random.Random(
+                f"{effective_seed}:{full_trait}:{subdim}"
+                if effective_seed is not None
+                else None          # truly random
+            )
+
+            shuffled = pool_ids[:]
             rng.shuffle(shuffled)
 
+            count = 0
             for qid in shuffled:
-                if counts[(full_trait, subdim)] >= n_per_subdim:
+                if count >= n_per_subdim:
                     break
                 if qid in seen_ids:
                     continue
-                # qid is guaranteed in _Q_BY_ID (filtered at build_lookup time)
                 selected.append(_Q_BY_ID[qid])
                 seen_ids.add(qid)
-                counts[(full_trait, subdim)] += 1   # O(1)
+                count += 1
 
     return selected
 
@@ -165,22 +142,8 @@ def select_clarification_questions(
 ) -> list:
     """
     Return up to n clarification questions for the traits with lowest confidence.
-
-    Parameters
-    ----------
-    confidence : dict
-        Must contain a "per_trait" sub-dict mapping trait names → confidence scores.
-        Trait names may be short ("O") or full ("Openness").
-    existing_answers : dict
-        Keys are question IDs already answered; those questions are excluded.
-    n : int
-        Maximum number of questions to return.
-
-    Returns
-    -------
-    list of question dicts (deterministic, no randomness).
+    Excludes questions already answered in the session.
     """
-    # ── Input guards ──────────────────────────────────────────────────────────
     if not isinstance(confidence, dict):
         confidence = {}
     if not isinstance(existing_answers, dict):
@@ -190,23 +153,18 @@ def select_clarification_questions(
     if not isinstance(per_trait, dict):
         per_trait = {}
 
-    # ── Normalize trait names in confidence dict ──────────────────────────────
     normalised_confidence: dict = {
         _normalize_trait(t): v for t, v in per_trait.items()
     }
 
-    # ── Rank traits by ascending confidence (most uncertain first) ────────────
     ranked_traits = [
         trait for trait, _ in sorted(
             normalised_confidence.items(), key=lambda kv: kv[1]
         )
-        if trait in _FULL_NAMES          # only known traits
+        if trait in _FULL_NAMES
     ]
 
-    # ── Excluded IDs ─────────────────────────────────────────────────────────
     excluded_ids: set = set(existing_answers.keys())
-
-    # ── Select questions, rotating across sub-dimensions ─────────────────────
     selected: list = []
     seen_ids: set = set()
 
@@ -214,9 +172,8 @@ def select_clarification_questions(
         if len(selected) >= n:
             break
 
-        subdims = _TRAIT_SUBDIMS_SORTED.get(full_trait, [])  # lexicographic order
+        subdims = _TRAIT_SUBDIMS_SORTED.get(full_trait, [])
 
-        # Build per-subdim pools of unused questions (sorted IDs for stability)
         subdim_pools: dict = {}
         for subdim in subdims:
             pool = [
@@ -226,22 +183,20 @@ def select_clarification_questions(
             if pool:
                 subdim_pools[subdim] = pool
 
-        # Rotate across sub-dimensions: pick one from each in turn
         while subdim_pools and len(selected) < n:
-            for subdim in sorted(subdim_pools.keys()):   # stable iteration order
+            for subdim in sorted(subdim_pools.keys()):
                 if len(selected) >= n:
                     break
                 pool = subdim_pools[subdim]
                 if not pool:
                     del subdim_pools[subdim]
                     continue
-                qid = pool.pop(0)           # first unused (sorted → deterministic)
+                qid = pool.pop(0)
                 if not pool:
                     del subdim_pools[subdim]
                 selected.append(_Q_BY_ID[qid])
                 seen_ids.add(qid)
             else:
-                # All remaining pools exhausted for this trait
                 break
 
     return selected
