@@ -4,6 +4,7 @@
 # ============================================================
 
 import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -19,23 +20,31 @@ logging.basicConfig(
     format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
 )
 
+logger = logging.getLogger("edwiserr")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # ── Warm up Supabase connection on startup ────────────────
+    # This prevents the 1-minute delay on the first request
+    try:
+        from db.client import get_supabase
+        sb = get_supabase()
+        sb.table("response_sessions").select("id").limit(1).execute()
+        logger.info("✅  Supabase connection warmed up")
+    except Exception as e:
+        logger.warning("⚠️  Supabase warmup failed (non-fatal): %s", e)
+    yield
+
+
 app = FastAPI(
     title="Edwiserr API",
     description="AI-powered career navigation backend — Supabase edition",
     version="2.0.0",
+    lifespan=lifespan,
 )
 
 API_PREFIX = "/api/v1"
-
-# ── CORS — covers every way a local browser might call the API ────────────────
-ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://localhost:8080",
-    "http://127.0.0.1:8080",
-]
 
 app.add_middleware(
     CORSMiddleware,

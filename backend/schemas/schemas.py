@@ -84,7 +84,7 @@ class ResponseSessionRead(ResponseSessionCreate):
 # Responses  (one row per answer)
 # ══════════════════════════════════════════════════════════════════════════════
 class ResponseCreate(BaseModel):
-    question_set_id: int
+    question_set_id: str
     selected_answer: str = Field(..., min_length=1, max_length=512)
 
 

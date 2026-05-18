@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import axios from "axios";
 
-const BASE     = import.meta.env.VITE_API_URL;
-const API      = `${BASE}/personality`;
+const BASE = import.meta.env.VITE_API_URL;
+const API = `${BASE}/personality`;
 const SESSIONS = `${BASE}/sessions`;
 
 const QUIZ_MODE = "fast";
@@ -22,21 +22,24 @@ function randomSeed() {
 }
 
 export default function Quiz({ userType, onComplete }) {
-  const [questions,         setQuestions]        = useState([]);
-  const [current,           setCurrent]          = useState(0);
-  const [answers,           setAnswers]           = useState({});
-  const [responseTimes,     setResponseTimes]     = useState({});
-  const [selected,          setSelected]          = useState(null);
-  const [loading,           setLoading]           = useState(true);
-  const [submitting,        setSubmitting]        = useState(false);
-  const [error,             setError]             = useState("");
+  const [questions, setQuestions] = useState([]);
+  const [current, setCurrent] = useState(0);
+  const [answers, setAnswers] = useState({});
+  const [responseTimes, setResponseTimes] = useState({});
+  const [selected, setSelected] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
   const [clarificationMode, setClarificationMode] = useState(false);
 
-  const sessionIdRef     = useRef(null);
-  const sessionSeedRef   = useRef(randomSeed());
+  const sessionIdRef = useRef(null);
+  // Promise that resolves once the session is created
+  // So submit can wait for it without blocking question loading
+  const sessionPromiseRef = useRef(null);
+  const sessionSeedRef = useRef(randomSeed());
   const questionStartRef = useRef(Date.now());
-  const hiddenAtRef      = useRef(null);
-  const loadedRef        = useRef(false);
+  const hiddenAtRef = useRef(null);
+  const loadedRef = useRef(false);
 
   const currentQuestion = questions[current] ?? null;
 
@@ -63,52 +66,66 @@ export default function Quiz({ userType, onComplete }) {
     return () => document.removeEventListener("visibilitychange", handleVisibility);
   }, []);
 
-  // ── Create DB session — fire and forget, never blocks the quiz ────────────
+  // ── Create DB session — starts in background, stores a Promise ────────────
+  // Quiz loads immediately. Submit awaits this Promise before saving answers.
   const createSession = useCallback(() => {
-    axios.post(SESSIONS, { student_identifier: `anon-${Date.now()}` })
+    sessionPromiseRef.current = axios.post(SESSIONS, {
+      student_identifier: `anon-${Date.now()}`,
+    })
       .then(res => {
         sessionIdRef.current = res.data.id;
         console.log("[Quiz] session created:", sessionIdRef.current);
+        return res.data.id;
       })
       .catch(err => {
         console.warn("[Quiz] session create failed (non-fatal):", err?.response?.data || err);
+        return null;
       });
-    // No await — returns immediately, quiz loads without waiting
   }, []);
 
-  // ── Save answers to DB — fire and forget ─────────────────────────────────
-  const saveAnswersToDB = useCallback((answersMap) => {
-    if (!sessionIdRef.current) return;
+  // ── Save answers — waits for session Promise first ────────────────────────
+    // Wait for session to finish creating (usually already done by submit time)
+    const saveAnswersToDB = useCallback(async (answersMap) => {
+        console.log("[DB] sessionPromiseRef:", sessionPromiseRef.current);
+        console.log("[DB] sessionIdRef:", sessionIdRef.current);
+        console.log("[DB] answersMap keys:", Object.keys(answersMap).length);
+  
+        const sessionId = await sessionPromiseRef.current;
+        console.log("[DB] sessionId after await:", sessionId);
+        if (!sessionId) return;
+
     const answers = Object.entries(answersMap).map(([question_set_id, selected_answer]) => ({
       question_set_id,
       selected_answer,
     }));
-    axios.post(`${SESSIONS}/${sessionIdRef.current}/answers`, { answers })
+
+    axios.post(`${SESSIONS}/${sessionId}/answers`, { answers })
       .then(() => console.log("[Quiz] saved", answers.length, "answers"))
       .catch(err => console.warn("[Quiz] save answers failed:", err?.response?.data || err));
   }, []);
 
-  // ── Mark session submitted — fire and forget ──────────────────────────────
-  const markSubmitted = useCallback(() => {
-    if (!sessionIdRef.current) return;
-    axios.post(`${SESSIONS}/${sessionIdRef.current}/submit`)
-      .then(() => console.log("[Quiz] session submitted"))
+  // ── Mark session submitted ────────────────────────────────────────────────
+  const markSubmitted = useCallback(async () => {
+    const sessionId = await sessionPromiseRef.current;
+    if (!sessionId) return;
+
+    axios.post(`${SESSIONS}/${sessionId}/submit`)
+      .then(() => console.log("[Quiz] session submitted:", sessionId))
       .catch(err => console.warn("[Quiz] mark submitted failed:", err?.response?.data || err));
   }, []);
 
-  // ── Load questions — fast, not blocked by DB ──────────────────────────────
+  // ── Load questions — fast, session starts in background ──────────────────
   const loadQuestions = useCallback(async () => {
     try {
       setLoading(true);
       setError("");
       sessionSeedRef.current = randomSeed();
 
-      // Questions load immediately — session creates in background
       const res = await axios.post(`${API}/questions`, {
         user_type: userType,
-        inst_id:   "frontend-web",
-        mode:      QUIZ_MODE,
-        seed:      sessionSeedRef.current,
+        inst_id: "frontend-web",
+        mode: QUIZ_MODE,
+        seed: sessionSeedRef.current,
       });
 
       const raw = res.data.questions || [];
@@ -124,7 +141,7 @@ export default function Quiz({ userType, onComplete }) {
       setSelected(null);
       questionStartRef.current = Date.now();
 
-      // Create session in background after questions are showing
+      // Start session creation in background — stores a Promise
       createSession();
 
     } catch (err) {
@@ -147,19 +164,21 @@ export default function Quiz({ userType, onComplete }) {
       setSubmitting(true);
       setError("");
 
-      // Save to DB in background, score immediately
-      saveAnswersToDB(finalAnswers);
-      markSubmitted();
+      // Run scoring + DB saves concurrently
+      // saveAnswersToDB awaits session Promise internally — no race condition
+      const [profileRes] = await Promise.all([
+        axios.post(`${API}/submit`, {
+          user_type: userType,
+          inst_id: "frontend-web",
+          mode: QUIZ_MODE,
+          answers: finalAnswers,
+          response_times_ms: finalTimes,
+        }),
+        saveAnswersToDB(finalAnswers),
+        markSubmitted(),
+      ]);
 
-      const profileRes = await axios.post(`${API}/submit`, {
-        user_type:         userType,
-        inst_id:           "frontend-web",
-        mode:              QUIZ_MODE,
-        answers:           finalAnswers,
-        response_times_ms: finalTimes,
-      });
-
-      const profile           = profileRes.data;
+      const profile = profileRes.data;
       const overallConfidence = profile?.confidence?.overall ?? 1;
 
       profile.response_session_id = sessionIdRef.current ?? null;
@@ -167,14 +186,14 @@ export default function Quiz({ userType, onComplete }) {
       if (!isClarification && overallConfidence < LOW_CONFIDENCE_THRESHOLD) {
         try {
           const clarifyRes = await axios.post(`${API}/clarify`, {
-            user_type:    userType,
+            user_type: userType,
             ocean_scores: profile.ocean_scores,
             confidences: {
-              Openness:          profile.confidence?.Openness          ?? 1,
+              Openness: profile.confidence?.Openness ?? 1,
               Conscientiousness: profile.confidence?.Conscientiousness ?? 1,
-              Extraversion:      profile.confidence?.Extraversion      ?? 1,
-              Agreeableness:     profile.confidence?.Agreeableness     ?? 1,
-              Neuroticism:       profile.confidence?.Neuroticism       ?? 1,
+              Extraversion: profile.confidence?.Extraversion ?? 1,
+              Agreeableness: profile.confidence?.Agreeableness ?? 1,
+              Neuroticism: profile.confidence?.Neuroticism ?? 1,
             },
             existing_answers: finalAnswers,
           });
@@ -211,11 +230,11 @@ export default function Quiz({ userType, onComplete }) {
   const handleAnswer = useCallback(async () => {
     if (!selected || !currentQuestion || submitting) return;
 
-    const qid     = currentQuestion.id;
+    const qid = currentQuestion.id;
     const elapsed = Math.min(Date.now() - questionStartRef.current, 30000);
 
-    const updatedAnswers = { ...answers,       [qid]: selected };
-    const updatedTimes   = { ...responseTimes, [qid]: elapsed  };
+    const updatedAnswers = { ...answers, [qid]: selected };
+    const updatedTimes = { ...responseTimes, [qid]: elapsed };
 
     setAnswers(updatedAnswers);
     setResponseTimes(updatedTimes);
@@ -241,11 +260,12 @@ export default function Quiz({ userType, onComplete }) {
   const handleRetry = useCallback(() => {
     loadedRef.current = false;
     sessionIdRef.current = null;
+    sessionPromiseRef.current = null;
     loadQuestions();
   }, [loadQuestions]);
 
   if (loading) return <div className="quiz-loading">Loading questions…</div>;
-  if (error)   return <div className="quiz-error"><p>{error}</p><button onClick={handleRetry}>Retry</button></div>;
+  if (error) return <div className="quiz-error"><p>{error}</p><button onClick={handleRetry}>Retry</button></div>;
   if (!currentQuestion) return <div className="quiz-error">No questions available.</div>;
 
   return (
